@@ -31,9 +31,9 @@ async function initDatabaseSchema() {
     // 3. Drop existing tables if re-initializing to ensure clean 9-table schema
     await connection.query(`
       SET FOREIGN_KEY_CHECKS = 0;
-      DROP TABLE IF EXISTS `notifications`;
-      DROP TABLE IF EXISTS `staff_completion_media`;
-      DROP TABLE IF EXISTS `staff_job_completions`;
+      DROP TABLE IF EXISTS \`notifications\`;
+      DROP TABLE IF EXISTS \`staff_completion_media\`;
+      DROP TABLE IF EXISTS \`staff_job_completions\`;
       DROP TABLE IF EXISTS \`customer_media_uploads\`;
       DROP TABLE IF EXISTS \`quote_requests\`;
       DROP TABLE IF EXISTS \`booking_requests\`;
@@ -207,29 +207,29 @@ async function initDatabaseSchema() {
         \`file_size_bytes\` BIGINT DEFAULT NULL,
         \`mime_type\` VARCHAR(100) DEFAULT NULL,
         \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT `fk_completion_media_completion` FOREIGN KEY (`completion_id`) REFERENCES `staff_job_completions` (`id`) ON DELETE CASCADE,
-        CONSTRAINT `fk_completion_media_work_order` FOREIGN KEY (`work_order_id`) REFERENCES `work_orders` (`id`) ON DELETE CASCADE
+        CONSTRAINT \`fk_completion_media_completion\` FOREIGN KEY (\`completion_id\`) REFERENCES \`staff_job_completions\` (\`id\`) ON DELETE CASCADE,
+        CONSTRAINT \`fk_completion_media_work_order\` FOREIGN KEY (\`work_order_id\`) REFERENCES \`work_orders\` (\`id\`) ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
       -- Table 10: notifications (Persistent User-Specific Notifications)
-      CREATE TABLE `notifications` (
-        `id` BIGINT AUTO_INCREMENT PRIMARY KEY,
-        `user_id` BIGINT NOT NULL,
-        `notification_type` VARCHAR(50) NOT NULL,
-        `title` VARCHAR(255) NOT NULL,
-        `message` TEXT NOT NULL,
-        `related_entity_type` VARCHAR(50) DEFAULT NULL,
-        `related_entity_id` BIGINT DEFAULT NULL,
-        `action_url` VARCHAR(255) DEFAULT NULL,
-        `is_read` TINYINT(1) NOT NULL DEFAULT 0,
-        `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        `read_at` TIMESTAMP NULL DEFAULT NULL,
-        CONSTRAINT `fk_notifications_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-        INDEX `idx_notifications_user_id` (`user_id`),
-        INDEX `idx_notifications_user_unread` (`user_id`, `is_read`),
-        INDEX `idx_notifications_created_at` (`created_at`),
-        INDEX `idx_notifications_type` (`notification_type`),
-        INDEX `idx_notifications_entity` (`related_entity_type`, `related_entity_id`)
+      CREATE TABLE \`notifications\` (
+        \`id\` BIGINT AUTO_INCREMENT PRIMARY KEY,
+        \`user_id\` BIGINT NOT NULL,
+        \`notification_type\` VARCHAR(50) NOT NULL,
+        \`title\` VARCHAR(255) NOT NULL,
+        \`message\` TEXT NOT NULL,
+        \`related_entity_type\` VARCHAR(50) DEFAULT NULL,
+        \`related_entity_id\` BIGINT DEFAULT NULL,
+        \`action_url\` VARCHAR(255) DEFAULT NULL,
+        \`is_read\` TINYINT(1) NOT NULL DEFAULT 0,
+        \`created_at\` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        \`read_at\` TIMESTAMP NULL DEFAULT NULL,
+        CONSTRAINT \`fk_notifications_user\` FOREIGN KEY (\`user_id\`) REFERENCES \`users\` (\`id\`) ON DELETE CASCADE,
+        INDEX \`idx_notifications_user_id\` (\`user_id\`),
+        INDEX \`idx_notifications_user_unread\` (\`user_id\`, \`is_read\`),
+        INDEX \`idx_notifications_created_at\` (\`created_at\`),
+        INDEX \`idx_notifications_type\` (\`notification_type\`),
+        INDEX \`idx_notifications_entity\` (\`related_entity_type\`, \`related_entity_id\`)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `;
 
