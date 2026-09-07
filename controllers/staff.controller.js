@@ -397,42 +397,106 @@ const updateStaff = async (req, res, next) => {
   }
 };
 
-// @desc    Delete staff profile & user account
+// @desc    Delete staff profile & user account (Clean Cascade for Office Admin)
 // @route   DELETE /api/v1/staff/:id
 // @access  Private (Office Admin Only)
 const deleteStaff = async (req, res, next) => {
+  const connection = await pool.getConnection();
   try {
     const { id } = req.params;
     const cleanId = id.replace(/^(stf-|usr-)/, '');
 
-    const [rows] = await pool.query(
+    const [rows] = await connection.query(
       'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ? OR sp.user_id = ?',
       [cleanId, cleanId]
     );
 
     if (rows.length === 0) {
+      connection.release();
       return res.status(404).json({
         success: false,
         message: `Staff profile not found with ID ${id}`,
       });
     }
 
+    const profileId = rows[0].profile_id;
     const userId = rows[0].user_id;
 
-    // Deleting user will CASCADE delete staff_profile
-    await pool.query('DELETE FROM users WHERE id = ?', [userId]);
+    await connection.beginTransaction();
+
+    // Disable foreign key checks for clean cascade
+    await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+
+    // 1. Unassign staff from work orders
+    await connection.query('UPDATE work_orders SET assigned_staff_id = NULL WHERE assigned_staff_id = ?', [profileId]);
+    await connection.query('UPDATE work_orders SET created_by = NULL WHERE created_by = ?', [userId]);
+
+    // Clean JSON assigned_staff_ids in work_orders if present
+    try {
+      const [allJobs] = await connection.query('SELECT id, assigned_staff_ids FROM work_orders WHERE assigned_staff_ids IS NOT NULL');
+      for (const j of allJobs) {
+        let ids = [];
+        try {
+          ids = typeof j.assigned_staff_ids === 'string' ? JSON.parse(j.assigned_staff_ids) : j.assigned_staff_ids;
+        } catch (e) {}
+        if (Array.isArray(ids) && (ids.includes(profileId) || ids.includes(Number(profileId)))) {
+          const updatedIds = ids.filter(x => x !== profileId && x !== Number(profileId));
+          await connection.query('UPDATE work_orders SET assigned_staff_ids = ? WHERE id = ?', [
+            updatedIds.length > 0 ? JSON.stringify(updatedIds) : null,
+            j.id
+          ]);
+        }
+      }
+    } catch (jsonErr) {
+      console.warn('[deleteStaff] assigned_staff_ids cleanup skipped:', jsonErr.message);
+    }
+
+    // 2. Unassign from booking requests
+    await connection.query('UPDATE booking_requests SET assignment_preference_staff_id = NULL WHERE assignment_preference_staff_id = ?', [profileId]);
+
+    // 3. Remove associated job material costs
+    try {
+      await connection.query('DELETE FROM job_material_costs WHERE technician_id = ?', [profileId]);
+    } catch (jmcErr) {
+      console.warn('[deleteStaff] job_material_costs cleanup:', jmcErr.message);
+    }
+
+    // 4. Remove technician completion media & reports
+    try {
+      const [completions] = await connection.query('SELECT id FROM staff_job_completions WHERE staff_id = ?', [profileId]);
+      if (completions.length > 0) {
+        const cIds = completions.map(c => c.id);
+        await connection.query('DELETE FROM staff_completion_media WHERE completion_id IN (?)', [cIds]);
+        await connection.query('DELETE FROM staff_job_completions WHERE staff_id = ?', [profileId]);
+      }
+    } catch (compErr) {
+      console.warn('[deleteStaff] completions cleanup:', compErr.message);
+    }
+
+    // 5. Remove notifications for this user
+    try {
+      await connection.query('DELETE FROM notifications WHERE user_id = ?', [userId]);
+    } catch (notifErr) {}
+
+    // 6. Delete staff profile and user account
+    await connection.query('DELETE FROM staff_profiles WHERE id = ?', [profileId]);
+    await connection.query('DELETE FROM users WHERE id = ?', [userId]);
+
+    await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+
+    await connection.commit();
+    connection.release();
 
     res.status(200).json({
       success: true,
-      message: `Staff member ID ${id} deleted successfully.`,
+      message: `Staff member ID ${id} and login account deleted successfully.`,
     });
   } catch (err) {
-    if (err.errno === 1451 || err.code === 'ER_ROW_IS_REFERENCED_2') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete this staff member because they are associated with existing job material costs or work orders. Please reassign or delete their associated records first.',
-      });
-    }
+    try {
+      await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+      await connection.rollback();
+    } catch (rbErr) {}
+    connection.release();
     next(err);
   }
 };
