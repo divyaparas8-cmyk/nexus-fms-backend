@@ -128,8 +128,13 @@ const getJobs = async (req, res, next) => {
     const queryParams = [];
 
     if (section && section.trim() !== '') {
-      sql += ' AND w.pipeline_stage = ?';
-      queryParams.push(section.trim());
+      const trimmedSection = section.trim();
+      if (trimmedSection === 'Invoiced' || trimmedSection === 'Invoice') {
+        sql += " AND w.pipeline_stage IN ('Invoiced', 'Invoice')";
+      } else {
+        sql += ' AND w.pipeline_stage = ?';
+        queryParams.push(trimmedSection);
+      }
     }
 
     // Role-based data isolation
