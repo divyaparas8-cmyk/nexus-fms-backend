@@ -588,7 +588,17 @@ const moveJobStage = async (req, res, next) => {
       }
     }
 
-    await pool.query('UPDATE work_orders SET pipeline_stage = ? WHERE id = ?', [normalizedStage, id]);
+    try {
+      await pool.query('UPDATE work_orders SET pipeline_stage = ? WHERE id = ?', [normalizedStage, id]);
+    } catch (dbErr) {
+      if (dbErr.message && (dbErr.message.includes('Data truncated') || dbErr.code === 'WARN_DATA_TRUNCATED' || dbErr.errno === 1265)) {
+        console.warn('[moveJobStage] Data truncation on pipeline_stage. Altering column to VARCHAR(100)...');
+        await pool.query("ALTER TABLE work_orders MODIFY COLUMN pipeline_stage VARCHAR(100) NOT NULL DEFAULT 'Quotes'");
+        await pool.query('UPDATE work_orders SET pipeline_stage = ? WHERE id = ?', [normalizedStage, id]);
+      } else {
+        throw dbErr;
+      }
+    }
 
     if (normalizedStage === 'Quotes' && existing[0].pipeline_stage !== 'Quotes') {
       QuoteRequestService.triggerAutoPhotoRequest(id);
@@ -809,7 +819,17 @@ const updateJobStatus = async (req, res, next) => {
     if (updates.length > 0) {
       let updateSql = `UPDATE work_orders SET ${updates.join(', ')} WHERE id = ?`;
       values.push(id);
-      await pool.query(updateSql, values);
+      try {
+        await pool.query(updateSql, values);
+      } catch (dbErr) {
+        if (dbErr.message && (dbErr.message.includes('Data truncated') || dbErr.code === 'WARN_DATA_TRUNCATED' || dbErr.errno === 1265)) {
+          console.warn('[updateJobStatus] Data truncation on pipeline_stage. Altering column to VARCHAR(100)...');
+          await pool.query("ALTER TABLE work_orders MODIFY COLUMN pipeline_stage VARCHAR(100) NOT NULL DEFAULT 'Quotes'");
+          await pool.query(updateSql, values);
+        } else {
+          throw dbErr;
+        }
+      }
     }
 
     // Notification Triggers

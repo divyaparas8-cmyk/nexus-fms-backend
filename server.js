@@ -107,6 +107,10 @@ app.listen(PORT, async () => {
   console.log(`=======================================================`);
   await testDbConnection();
   
+  // Apply safe, automatic database schema migrations (e.g. pipeline_stage VARCHAR support)
+  const { runAutoMigrations } = require('./config/autoMigrate');
+  await runAutoMigrations();
+  
   // Initialize Background Schedulers
   const { initScheduler } = require('./scheduler/photoReminderJob');
   const { initBookingScheduler } = require('./scheduler/bookingReminderJob');
