@@ -62,7 +62,8 @@ const runAutoMigrations = async () => {
       { name: 'cancelled_by', ddl: "ALTER TABLE work_orders ADD COLUMN cancelled_by BIGINT DEFAULT NULL" },
       { name: 'cancelled_at', ddl: "ALTER TABLE work_orders ADD COLUMN cancelled_at TIMESTAMP NULL DEFAULT NULL" },
       { name: 'previous_appointment_date', ddl: "ALTER TABLE work_orders ADD COLUMN previous_appointment_date DATE DEFAULT NULL" },
-      { name: 'previous_appointment_time', ddl: "ALTER TABLE work_orders ADD COLUMN previous_appointment_time VARCHAR(50) DEFAULT NULL" }
+      { name: 'previous_appointment_time', ddl: "ALTER TABLE work_orders ADD COLUMN previous_appointment_time VARCHAR(50) DEFAULT NULL" },
+      { name: 'detected_category', ddl: "ALTER TABLE work_orders ADD COLUMN detected_category VARCHAR(100) DEFAULT NULL" }
     ];
 
     for (const col of optionalColumns) {
@@ -73,6 +74,46 @@ const runAutoMigrations = async () => {
           // Field already exists or non-critical error
         }
       }
+    }
+
+    // 5. Ensure staff_profiles table has trade & workload management columns
+    const staffColumns = [
+      { name: 'trades_json', ddl: "ALTER TABLE staff_profiles ADD COLUMN trades_json JSON DEFAULT NULL" },
+      { name: 'max_active_jobs', ddl: "ALTER TABLE staff_profiles ADD COLUMN max_active_jobs INT NOT NULL DEFAULT 5" }
+    ];
+
+    for (const col of staffColumns) {
+      try {
+        await pool.query(col.ddl);
+      } catch (colErr) {
+        if (colErr.code !== 'ER_DUP_FIELDNAME') {
+          // Field already exists or non-critical error
+        }
+      }
+    }
+
+    // 6. Ensure job_assignment_logs audit table exists
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS job_assignment_logs (
+          id BIGINT AUTO_INCREMENT PRIMARY KEY,
+          work_order_id BIGINT NOT NULL,
+          staff_id BIGINT NOT NULL,
+          assigned_by VARCHAR(100) NOT NULL DEFAULT 'SYSTEM_AUTO_ASSIGN',
+          assignment_type ENUM('AUTO_SKILL_MATCH', 'MANUAL_ADMIN', 'REASSIGNMENT') NOT NULL DEFAULT 'AUTO_SKILL_MATCH',
+          trade_category VARCHAR(100) DEFAULT NULL,
+          match_score INT NOT NULL DEFAULT 0,
+          selection_reason TEXT NOT NULL,
+          assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          INDEX idx_jal_wo (work_order_id),
+          INDEX idx_jal_staff (staff_id),
+          CONSTRAINT fk_jal_wo FOREIGN KEY (work_order_id) REFERENCES work_orders (id) ON DELETE CASCADE,
+          CONSTRAINT fk_jal_staff FOREIGN KEY (staff_id) REFERENCES staff_profiles (id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+      `);
+      console.log('  ✓ [Auto-Migration] job_assignment_logs table verified');
+    } catch (err) {
+      console.warn('  ⚠️ [Auto-Migration] Could not verify job_assignment_logs table:', err.message);
     }
 
     console.log('✅ [Auto-Migration] Auto-migrations completed successfully.');

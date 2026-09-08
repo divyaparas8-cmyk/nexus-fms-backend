@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
+const { autoAssignTechnician, isAutoAssignmentEnabled } = require('../services/autoAssignment.service');
+const { dispatchN8NWebhook } = require('../services/webhook.service');
 
 
 // @desc    Get public request information by secure token (NO LOGIN REQUIRED)
@@ -264,10 +266,77 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     }
 
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
-    const [woRows] = await connection.query("SELECT title, resident_name, property_address FROM work_orders WHERE id = ?", [workOrderId]);
-    const jobTitle = woRows[0]?.title || 'Repair Job';
-    const resName = woRows[0]?.resident_name || 'Resident';
-    const resAddress = woRows[0]?.property_address || 'Property';
+    const [woRows] = await connection.query(
+      `SELECT id, job_number, title, priority, property_address, resident_name, resident_phone, resident_email, assigned_staff_id, description, detected_category 
+       FROM work_orders 
+       WHERE id = ?`,
+      [workOrderId]
+    );
+    const wo = woRows[0] || {};
+    const jobTitle = wo.title || 'Repair Job';
+    const resName = wo.resident_name || 'Resident';
+    const resAddress = wo.property_address || 'Property';
+
+    let autoAssignOutcome = null;
+
+    if (wo.assigned_staff_id) {
+      // Existing assigned technician: NEVER reassign automatically.
+      // Save new photos (already done) and notify the existing technician that new photos were added.
+      const [techUser] = await connection.query(
+        `SELECT sp.user_id, u.full_name, u.email, u.phone 
+         FROM staff_profiles sp 
+         JOIN users u ON sp.user_id = u.id 
+         WHERE sp.id = ?`,
+        [wo.assigned_staff_id]
+      );
+      if (techUser.length > 0) {
+        await notificationService.createNotification({
+          recipientUserId: techUser[0].user_id,
+          type: 'TASK_UPDATE',
+          title: 'New photos uploaded for assigned task',
+          message: `Tenant uploaded ${savedMediaList.length} new photo(s) for task "${jobTitle}" at ${resAddress}.`,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: workOrderId,
+          actionUrl: '/maintenance/my-tasks',
+        }, connection);
+      }
+    } else if (isAutoAssignmentEnabled()) {
+      // Work order is unassigned and auto-assignment feature is enabled:
+      try {
+        const assignResult = await autoAssignTechnician(workOrderId, connection);
+        autoAssignOutcome = assignResult;
+
+        if (assignResult.assigned) {
+          // Notify the newly assigned technician
+          await notificationService.createNotification({
+            recipientUserId: assignResult.userId,
+            type: 'TASK_ASSIGNED',
+            title: 'New task automatically assigned',
+            message: `You have been automatically assigned to ${jobTitle} at ${resAddress}`,
+            relatedEntityType: 'work_orders',
+            relatedEntityId: workOrderId,
+            actionUrl: '/maintenance/my-tasks',
+          }, connection);
+        } else {
+          // No technician available: Do NOT fail upload. Leave assigned_staff_id NULL.
+          // Dispatch AUTO_ASSIGN_FAILED notification to Office Admins
+          for (const admin of admins) {
+            await notificationService.createNotification({
+              recipientUserId: admin.id,
+              type: 'AUTO_ASSIGN_FAILED',
+              title: 'Auto-assignment Unsuccessful',
+              message: `Auto-assignment could not find an available technician for "${jobTitle}" (${assignResult.tradeCategory || 'Repair'}). Reason: ${assignResult.reason}. Please assign manually.`,
+              relatedEntityType: 'work_orders',
+              relatedEntityId: workOrderId,
+              actionUrl: '/admin/pipeline',
+            }, connection);
+          }
+        }
+      } catch (assignErr) {
+        console.error('[AutoAssignment] Error during quote upload auto-assignment:', assignErr);
+        // Tenant upload must succeed even if auto-assignment encounters an error
+      }
+    }
 
     for (const admin of admins) {
       await notificationService.createNotification({
@@ -283,6 +352,60 @@ const submitPublicQuoteUpload = async (req, res, next) => {
 
     await connection.commit();
     connection.release();
+
+    // Dispatch n8n automation events after successful commit
+    if (autoAssignOutcome) {
+      if (autoAssignOutcome.assigned) {
+        // Phase 4: TASK_ASSIGNED with complete real data
+        const photoUrls = savedMediaList.map((m) => m.filePath);
+        const taskAssignedPayload = {
+          workOrderId: wo.id,
+          jobNumber: wo.job_number,
+          title: wo.title,
+          tradeCategory: autoAssignOutcome.tradeCategory,
+          priority: wo.priority || 'NORMAL',
+          propertyAddress: wo.property_address,
+          residentName: wo.resident_name,
+          residentNotes: userNotes || '',
+          photoCount: savedMediaList.length,
+          photoUrls,
+          technicianName: autoAssignOutcome.staffName,
+          technicianEmail: autoAssignOutcome.staffEmail,
+          technicianPhone: autoAssignOutcome.staffPhone,
+          technician: {
+            id: autoAssignOutcome.staffProfileId,
+            name: autoAssignOutcome.staffName,
+            email: autoAssignOutcome.staffEmail,
+            phone: autoAssignOutcome.staffPhone,
+          },
+          assignmentType: 'AUTO_SKILL_MATCH',
+          matchScore: autoAssignOutcome.matchScore,
+          selectionReason: autoAssignOutcome.reason,
+          actionUrl: '/maintenance/my-tasks',
+        };
+        dispatchN8NWebhook('TASK_ASSIGNED', taskAssignedPayload).catch((err) => {
+          console.warn('[N8N_DISPATCH_WARN] Failed to dispatch TASK_ASSIGNED webhook:', err.message);
+        });
+      } else if (!autoAssignOutcome.alreadyAssigned) {
+        // AUTO_ASSIGN_FAILED event for Office Admin automation
+        const autoAssignFailedPayload = {
+          workOrderId: wo.id,
+          jobNumber: wo.job_number,
+          title: wo.title,
+          tradeCategory: autoAssignOutcome.tradeCategory || null,
+          priority: wo.priority || 'NORMAL',
+          propertyAddress: wo.property_address,
+          residentName: wo.resident_name,
+          residentNotes: userNotes || '',
+          photoCount: savedMediaList.length,
+          failureReason: autoAssignOutcome.reason,
+          actionUrl: '/admin/pipeline',
+        };
+        dispatchN8NWebhook('AUTO_ASSIGN_FAILED', autoAssignFailedPayload).catch((err) => {
+          console.warn('[N8N_DISPATCH_WARN] Failed to dispatch AUTO_ASSIGN_FAILED webhook:', err.message);
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,

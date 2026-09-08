@@ -523,6 +523,20 @@ const createJob = async (req, res, next) => {
           actionUrl: `/maintenance/my-tasks`
         });
       }
+
+      // Audit log for manual assignment upon creation
+      await pool.query(
+        `INSERT INTO job_assignment_logs 
+          (work_order_id, staff_id, assigned_by, assignment_type, trade_category, match_score, selection_reason)
+         VALUES (?, ?, ?, 'MANUAL_ADMIN', ?, 0, ?)`,
+        [
+          result.insertId,
+          rawStaffId,
+          req.user?.full_name || 'Office Admin',
+          tradeCategory || null,
+          `Manually assigned by ${req.user?.full_name || 'Office Admin'} upon creation`,
+        ]
+      ).catch((logErr) => console.warn('[AuditLog] Failed to log createJob assignment:', logErr.message));
     }
 
     // Create Notification for new job
@@ -874,6 +888,26 @@ const updateJobStatus = async (req, res, next) => {
             actionUrl: '/maintenance/my-tasks'
           });
         }
+
+        // Audit log for manual assignment / reassignment
+        const assignType = (prevStaffId !== null && prevStaffId !== undefined) ? 'REASSIGNMENT' : 'MANUAL_ADMIN';
+        const reasonText = (prevStaffId !== null && prevStaffId !== undefined)
+          ? `Manually reassigned from Staff ID #${prevStaffId} by ${req.user?.full_name || 'Office Admin'}`
+          : `Manually assigned by ${req.user?.full_name || 'Office Admin'}`;
+
+        await pool.query(
+          `INSERT INTO job_assignment_logs 
+            (work_order_id, staff_id, assigned_by, assignment_type, trade_category, match_score, selection_reason)
+           VALUES (?, ?, ?, ?, ?, 0, ?)`,
+          [
+            id,
+            targetStaffId,
+            req.user?.full_name || 'Office Admin',
+            assignType,
+            existingJob.detected_category || null,
+            reasonText,
+          ]
+        ).catch((logErr) => console.warn('[AuditLog] Failed to log manual assignment:', logErr.message));
       }
     }
 
@@ -1204,6 +1238,71 @@ const cancelJob = async (req, res, next) => {
   }
 };
 
+// @desc    Get job assignment audit history
+// @route   GET /api/v1/jobs/:id/assignment-history
+// @access  Private (Office Admin, Office Team, Maintenance Staff)
+const getAssignmentHistory = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const [woRows] = await pool.query('SELECT id, job_number, title FROM work_orders WHERE id = ?', [id]);
+    if (woRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: `Job #${id} not found.`,
+      });
+    }
+
+    const [logs] = await pool.query(
+      `SELECT 
+        jal.id,
+        jal.work_order_id,
+        jal.staff_id,
+        jal.assigned_by,
+        jal.assignment_type,
+        jal.trade_category,
+        jal.match_score,
+        jal.selection_reason,
+        jal.assigned_at,
+        u.full_name as staff_name,
+        u.email as staff_email,
+        u.phone as staff_phone,
+        sp.role_title
+       FROM job_assignment_logs jal
+       LEFT JOIN staff_profiles sp ON jal.staff_id = sp.id
+       LEFT JOIN users u ON sp.user_id = u.id
+       WHERE jal.work_order_id = ?
+       ORDER BY jal.assigned_at DESC, jal.id DESC`,
+      [id]
+    );
+
+    const history = logs.map((log) => ({
+      id: log.id,
+      workOrderId: log.work_order_id,
+      technician: log.staff_id ? {
+        staffId: log.staff_id,
+        name: log.staff_name || 'Technician',
+        email: log.staff_email || null,
+        phone: log.staff_phone || null,
+        roleTitle: log.role_title || 'Technician',
+      } : null,
+      assignmentType: log.assignment_type,
+      assignedBy: log.assigned_by,
+      timestamp: log.assigned_at,
+      trade: log.trade_category,
+      score: log.match_score,
+      reason: log.selection_reason,
+    }));
+
+    res.status(200).json({
+      success: true,
+      data: history,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getJobs,
   getJobById,
@@ -1212,4 +1311,5 @@ module.exports = {
   updateJobStatus,
   deleteJob,
   cancelJob,
+  getAssignmentHistory,
 };

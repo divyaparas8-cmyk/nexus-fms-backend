@@ -8,6 +8,7 @@ const {
   updateJobStatus,
   deleteJob,
   cancelJob,
+  getAssignmentHistory,
 } = require('../controllers/job.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -20,6 +21,7 @@ const upload = require('../middleware/upload.middleware');
 // Read Endpoints (Office Admin, Office Team & Maintenance Staff)
 router.get('/', getJobs);
 router.get('/:id', getJobById);
+router.get('/:id/assignment-history', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), getAssignmentHistory);
 router.get('/:id/completion-evidence', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), getJobCompletionEvidence);
 
 // Create Endpoint (Office Admin Only)
