@@ -3,14 +3,56 @@
  * Dispatches event payloads to N8N.cloud workflows
  */
 
+const getFrontendBaseUrl = () => {
+  const url = process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app';
+  return url.replace(/\/$/, '');
+};
+
 const dispatchN8NWebhook = async (eventType, payload) => {
   const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
+
+  let formattedPayload = payload ? { ...payload } : {};
+
+  if (eventType === 'TASK_ASSIGNED') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+
+    // 1. Direct frontend URL where technician can open the assigned job details
+    if (workOrderId) {
+      formattedPayload.actionUrl = `${frontendBase}/jobs/${workOrderId}`;
+    } else if (!formattedPayload.actionUrl || !formattedPayload.actionUrl.startsWith('http')) {
+      formattedPayload.actionUrl = `${frontendBase}/maintenance/my-tasks`;
+    }
+
+    // 2. Ensure entityId and workOrderId
+    if (workOrderId) {
+      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
+      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
+    }
+
+    // 3. Ensure technicianName & technicianPhone
+    formattedPayload.technicianName = formattedPayload.technicianName || formattedPayload.technician?.name || null;
+    formattedPayload.technicianPhone = formattedPayload.technicianPhone || formattedPayload.technician?.phone || formattedPayload.contactPhone || null;
+
+    // 4. Ensure propertyAddress
+    formattedPayload.propertyAddress = formattedPayload.propertyAddress || formattedPayload.address || null;
+
+    // 5. Ensure title
+    formattedPayload.title = formattedPayload.title || 'New task assigned';
+
+    // 6. Ensure message
+    if (!formattedPayload.message) {
+      const jobDesc = formattedPayload.title || `Work Order #${workOrderId || ''}`;
+      const addrDesc = formattedPayload.propertyAddress ? ` at ${formattedPayload.propertyAddress}` : '';
+      formattedPayload.message = `New task assigned: ${jobDesc}${addrDesc}`;
+    }
+  }
 
   const eventData = {
     event: eventType,
     timestamp: new Date().toISOString(),
     source: 'nexus_fms_backend',
-    data: payload,
+    data: formattedPayload,
   };
 
   if (!n8nWebhookUrl) {

@@ -417,19 +417,23 @@ const dispatchJob = async (req, res, next) => {
     // Create Notification for the assigned staff
     try {
       const [staffUserRows] = await pool.query(
-        "SELECT user_id FROM staff_profiles WHERE id = ?",
+        "SELECT sp.id, sp.user_id, sp.phone as staff_phone, u.full_name, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?",
         [finalStaffId]
       );
       
       if (staffUserRows.length > 0) {
+        const staff = staffUserRows[0];
+        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
         await notificationService.createNotification({
-          recipientUserId: staffUserRows[0].user_id,
+          recipientUserId: staff.user_id,
           type: 'TASK_ASSIGNED',
           title: 'New Task Assigned',
           message: `You have been assigned to Work Order #${targetJobId} on ${targetDate} at ${targetSlot}.`,
           relatedEntityType: 'work_orders',
           relatedEntityId: parseInt(targetJobId, 10),
-          actionUrl: '/admin/calendar'
+          actionUrl: `${frontendBase}/jobs/${targetJobId}`,
+          technicianName: staff.full_name,
+          technicianPhone: staff.staff_phone || staff.user_phone,
         });
       }
     } catch (notifErr) {

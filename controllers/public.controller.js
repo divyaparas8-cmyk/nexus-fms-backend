@@ -308,8 +308,11 @@ const submitPublicQuoteUpload = async (req, res, next) => {
         const assignResult = await autoAssignTechnician(workOrderId, connection);
         autoAssignOutcome = assignResult;
 
+        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+        const directJobActionUrl = `${frontendBase}/jobs/${workOrderId}`;
+
         if (assignResult.assigned) {
-          // Notify the newly assigned technician
+          // Notify the newly assigned technician in-app (skipWebhook to avoid duplicate dispatch before transaction commit)
           await notificationService.createNotification({
             recipientUserId: assignResult.userId,
             type: 'TASK_ASSIGNED',
@@ -317,7 +320,8 @@ const submitPublicQuoteUpload = async (req, res, next) => {
             message: `You have been automatically assigned to ${jobTitle} at ${resAddress}`,
             relatedEntityType: 'work_orders',
             relatedEntityId: workOrderId,
-            actionUrl: '/maintenance/my-tasks',
+            actionUrl: directJobActionUrl,
+            skipWebhook: true,
           }, connection);
         } else {
           // No technician available: Do NOT fail upload. Leave assigned_staff_id NULL.
@@ -358,12 +362,17 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     // Dispatch n8n automation events after successful commit
     if (autoAssignOutcome) {
       if (autoAssignOutcome.assigned) {
-        // Phase 4: TASK_ASSIGNED with complete real data
+        // Phase 4: TASK_ASSIGNED with complete real data and direct actionUrl
         const photoUrls = savedMediaList.map((m) => m.filePath);
+        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+        const directJobActionUrl = `${frontendBase}/jobs/${wo.id}`;
+
         const taskAssignedPayload = {
+          entityId: wo.id,
           workOrderId: wo.id,
           jobNumber: wo.job_number,
           title: wo.title,
+          message: `New task assigned: ${wo.title} at ${wo.property_address}`,
           tradeCategory: autoAssignOutcome.tradeCategory,
           priority: wo.priority || 'NORMAL',
           propertyAddress: wo.property_address,
@@ -383,7 +392,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
           assignmentType: 'AUTO_SKILL_MATCH',
           matchScore: autoAssignOutcome.matchScore,
           selectionReason: autoAssignOutcome.reason,
-          actionUrl: '/maintenance/my-tasks',
+          actionUrl: directJobActionUrl,
         };
         dispatchN8NWebhook('TASK_ASSIGNED', taskAssignedPayload).catch((err) => {
           console.warn('[N8N_DISPATCH_WARN] Failed to dispatch TASK_ASSIGNED webhook:', err.message);

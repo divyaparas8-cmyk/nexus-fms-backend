@@ -512,16 +512,24 @@ const createJob = async (req, res, next) => {
     }
 
     if (rawStaffId) {
-      const [spUser] = await pool.query('SELECT user_id FROM staff_profiles WHERE id = ?', [rawStaffId]);
+      const [spUser] = await pool.query(
+        'SELECT sp.id, sp.user_id, sp.phone as staff_phone, u.full_name, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
+        [rawStaffId]
+      );
       if (spUser.length > 0) {
+        const staff = spUser[0];
+        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
         await notificationService.createNotification({
-          recipientUserId: spUser[0].user_id,
+          recipientUserId: staff.user_id,
           type: 'TASK_ASSIGNED',
           title: 'New task assigned',
           message: `Assigned to ${jobTitle} at ${resAddress}`,
           relatedEntityType: 'work_orders',
           relatedEntityId: result.insertId,
-          actionUrl: `/maintenance/my-tasks`
+          actionUrl: `${frontendBase}/jobs/${result.insertId}`,
+          technicianName: staff.full_name,
+          technicianPhone: staff.staff_phone || staff.user_phone,
+          propertyAddress: resAddress,
         });
       }
 
@@ -877,16 +885,24 @@ const updateJobStatus = async (req, res, next) => {
       }
 
       if (targetStaffId !== null && targetStaffId !== undefined) {
-        const [spUser] = await pool.query('SELECT user_id FROM staff_profiles WHERE id = ?', [targetStaffId]);
+        const [spUser] = await pool.query(
+          'SELECT sp.id, sp.user_id, sp.phone as staff_phone, u.full_name, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
+          [targetStaffId]
+        );
         if (spUser.length > 0) {
+          const staff = spUser[0];
+          const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
           await notificationService.createNotification({
-            recipientUserId: spUser[0].user_id,
+            recipientUserId: staff.user_id,
             type: 'TASK_ASSIGNED',
             title: 'New task assigned',
             message: `Assigned to ${existingJob.title} at ${existingJob.property_address}`,
             relatedEntityType: 'work_orders',
             relatedEntityId: id,
-            actionUrl: '/maintenance/my-tasks'
+            actionUrl: `${frontendBase}/jobs/${id}`,
+            technicianName: staff.full_name,
+            technicianPhone: staff.staff_phone || staff.user_phone,
+            propertyAddress: existingJob.property_address,
           });
         }
 

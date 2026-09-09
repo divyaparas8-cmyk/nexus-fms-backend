@@ -61,6 +61,10 @@ const notificationService = {
       relatedEntityId: data.relatedEntityId,
       actionUrl: data.actionUrl,
       channels: ['IN_APP'], // Legacy calls only trigger IN_APP and socket
+      technicianName: data.technicianName || null,
+      technicianPhone: data.technicianPhone || null,
+      propertyAddress: data.propertyAddress || null,
+      skipWebhook: data.skipWebhook || false,
       connection
     });
   },
@@ -78,6 +82,10 @@ const notificationService = {
     channels = ['IN_APP'],
     contactEmail = null,
     contactPhone = null,
+    technicianName = null,
+    technicianPhone = null,
+    propertyAddress = null,
+    skipWebhook = false,
     connection = null
   }) {
     const db = connection || pool;
@@ -123,19 +131,69 @@ const notificationService = {
       }
 
       // Dispatch event to N8N webhook asynchronously without blocking main flow
-      dispatchN8NWebhook(type, {
-        notificationId,
-        type,
-        title,
-        message: finalMessage,
-        recipientUserId,
-        contactEmail,
-        contactPhone,
-        actionUrl,
-        entityType: relatedEntityType,
-        entityId: relatedEntityId,
-        data: sanitizedData || structuredData || null,
-      }).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));
+      if (!skipWebhook) {
+        let n8nPayload = {
+          notificationId,
+          type,
+          title,
+          message: finalMessage,
+          recipientUserId,
+          contactEmail,
+          contactPhone,
+          actionUrl,
+          entityType: relatedEntityType,
+          entityId: relatedEntityId,
+          technicianName,
+          technicianPhone,
+          propertyAddress,
+          data: sanitizedData || structuredData || null,
+        };
+
+        if (type === 'TASK_ASSIGNED') {
+          const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+          const workOrderId = relatedEntityId || n8nPayload.entityId;
+          n8nPayload.workOrderId = workOrderId;
+          n8nPayload.entityId = workOrderId;
+          n8nPayload.actionUrl = workOrderId ? `${frontendBase}/jobs/${workOrderId}` : (actionUrl || `${frontendBase}/maintenance/my-tasks`);
+
+          // Fetch technician details if missing
+          if (recipientUserId && (!n8nPayload.technicianName || !n8nPayload.technicianPhone)) {
+            try {
+              const [techRows] = await db.query(
+                `SELECT u.full_name, u.phone, u.email, sp.phone as staff_phone 
+                 FROM users u 
+                 LEFT JOIN staff_profiles sp ON sp.user_id = u.id 
+                 WHERE u.id = ?`,
+                [recipientUserId]
+              );
+              if (techRows.length > 0) {
+                n8nPayload.technicianName = n8nPayload.technicianName || techRows[0].full_name;
+                n8nPayload.technicianPhone = n8nPayload.technicianPhone || techRows[0].staff_phone || techRows[0].phone;
+                n8nPayload.contactPhone = n8nPayload.contactPhone || n8nPayload.technicianPhone;
+              }
+            } catch (tErr) {
+              console.warn('[NotificationService] Could not enrich technician info:', tErr.message);
+            }
+          }
+
+          // Fetch propertyAddress if missing
+          if (workOrderId && !n8nPayload.propertyAddress) {
+            try {
+              const [woRows] = await db.query(
+                'SELECT property_address, title FROM work_orders WHERE id = ?',
+                [workOrderId]
+              );
+              if (woRows.length > 0) {
+                n8nPayload.propertyAddress = woRows[0].property_address;
+              }
+            } catch (wErr) {
+              console.warn('[NotificationService] Could not enrich property address:', wErr.message);
+            }
+          }
+        }
+
+        dispatchN8NWebhook(type, n8nPayload).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));
+      }
 
     } catch (error) {
       console.error('[NotificationService] Dispatch failed:', error);

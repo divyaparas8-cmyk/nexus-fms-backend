@@ -439,9 +439,11 @@ async function runAllTests() {
   try {
     // Verify payload schema and fields
     const testPayload = {
+      entityId: 109,
       workOrderId: 109,
       jobNumber: 'WO-109',
       title: 'Boiler leaking hot water',
+      message: 'New task assigned: Boiler leaking hot water at 10 Fleet St, London EC4Y 1AU',
       tradeCategory: 'Plumbing',
       priority: 'URGENT',
       propertyAddress: '10 Fleet St, London EC4Y 1AU',
@@ -461,7 +463,7 @@ async function runAllTests() {
       assignmentType: 'AUTO_SKILL_MATCH',
       matchScore: 92,
       selectionReason: "Auto-matched for 'Plumbing'. Active workload: 0/5 jobs.",
-      actionUrl: '/maintenance/my-tasks',
+      actionUrl: 'https://nexus-fms.netlify.app/jobs/109',
     };
 
     // Test webhook dispatch function returns a valid result object
