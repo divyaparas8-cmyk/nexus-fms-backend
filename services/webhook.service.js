@@ -48,6 +48,46 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'QUOTE_PHOTO_REQUEST' || eventType === 'NEW_QUOTE_REQUEST') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+    let token = formattedPayload.secureToken || formattedPayload.data?.secure_token || null;
+
+    if (!token && workOrderId) {
+      try {
+        const { pool } = require('../config/db');
+        const [qrRows] = await pool.query(
+          'SELECT secure_token FROM quote_requests WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 1',
+          [workOrderId]
+        );
+        if (qrRows.length > 0) token = qrRows[0].secure_token;
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    if (token) {
+      const uploadUrl = `${frontendBase}/quote-request/${token}`;
+      formattedPayload.actionUrl = uploadUrl;
+      formattedPayload.uploadUrl = uploadUrl;
+      formattedPayload.photoUploadLink = uploadUrl;
+      formattedPayload.secureToken = token;
+      if (formattedPayload.data) {
+        formattedPayload.data.actionUrl = uploadUrl;
+        formattedPayload.data.uploadUrl = uploadUrl;
+        formattedPayload.data.photoUploadLink = uploadUrl;
+        formattedPayload.data.uploadLink = uploadUrl;
+        formattedPayload.data.secureToken = token;
+      }
+    }
+
+    if (workOrderId) {
+      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
+      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
+      formattedPayload.reference = formattedPayload.reference || workOrderId;
+    }
+  }
+
   const eventData = {
     event: eventType,
     timestamp: new Date().toISOString(),

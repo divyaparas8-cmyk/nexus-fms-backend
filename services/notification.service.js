@@ -190,6 +190,37 @@ const notificationService = {
               console.warn('[NotificationService] Could not enrich property address:', wErr.message);
             }
           }
+        } else if (type === 'QUOTE_PHOTO_REQUEST' || type === 'NEW_QUOTE_REQUEST') {
+          const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+          const workOrderId = relatedEntityId || n8nPayload.entityId;
+          n8nPayload.workOrderId = workOrderId;
+          n8nPayload.entityId = workOrderId;
+          n8nPayload.reference = workOrderId;
+
+          // Resolve secure_token from quote_requests
+          let token = n8nPayload.data?.secure_token || n8nPayload.data?.token || n8nPayload.secureToken || null;
+          if (!token && workOrderId) {
+            try {
+              const [qrRows] = await db.query(
+                'SELECT secure_token FROM quote_requests WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 1',
+                [workOrderId]
+              );
+              if (qrRows.length > 0) token = qrRows[0].secure_token;
+            } catch (e) {}
+          }
+
+          if (token) {
+            const uploadUrl = `${frontendBase}/quote-request/${token}`;
+            n8nPayload.actionUrl = uploadUrl;
+            n8nPayload.uploadUrl = uploadUrl;
+            n8nPayload.photoUploadLink = uploadUrl;
+            if (n8nPayload.data) {
+              n8nPayload.data.actionUrl = uploadUrl;
+              n8nPayload.data.uploadUrl = uploadUrl;
+              n8nPayload.data.photoUploadLink = uploadUrl;
+              n8nPayload.data.uploadLink = uploadUrl;
+            }
+          }
         }
 
         dispatchN8NWebhook(type, n8nPayload).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));
