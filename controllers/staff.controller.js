@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
+const { uploadMediaFile } = require('../services/cloudinary.service');
 
 // @desc    Get all staff members / technicians
 // @route   GET /api/v1/staff
@@ -217,7 +218,11 @@ const createStaff = async (req, res, next) => {
     const plainPassword = (password && password.trim() !== '') ? password.trim() : 'Password123!';
     const passwordHash = await bcrypt.hash(plainPassword, salt);
 
-    const avatarPath = req.file ? `/uploads/${req.file.filename}` : (req.body.avatarUrl || req.body.avatar_url || null);
+    let avatarPath = req.body.avatarUrl || req.body.avatar_url || null;
+    if (req.file) {
+      const upRes = await uploadMediaFile(req.file, 'avatars');
+      avatarPath = upRes?.url || `/uploads/${req.file.filename}`;
+    }
 
     // 1. Create User
     const [userResult] = await connection.query(
@@ -333,7 +338,11 @@ const updateStaff = async (req, res, next) => {
     const staffName = (full_name || name || '').trim();
     const staffPhone = (phone || '').trim();
     const staffEmail = (email || '').trim();
-    const staffAvatar = req.file ? `/uploads/${req.file.filename}` : (avatarUrl !== undefined || avatar_url !== undefined ? (avatarUrl || avatar_url || '') : null);
+    let staffAvatar = (avatarUrl !== undefined || avatar_url !== undefined) ? (avatarUrl || avatar_url || '') : null;
+    if (req.file) {
+      const upRes = await uploadMediaFile(req.file, 'avatars');
+      staffAvatar = upRes?.url || `/uploads/${req.file.filename}`;
+    }
     const staffRoleTitle = (role_title || role || 'Maintenance Technician').trim();
 
     if (staffName) {

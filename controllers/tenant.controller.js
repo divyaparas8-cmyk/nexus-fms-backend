@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
+const { uploadMediaFile } = require('../services/cloudinary.service');
 
 // @desc    Get all residents / tenants (supports optional search filter)
 // @route   GET /api/v1/tenants
@@ -93,8 +94,17 @@ const createTenant = async (req, res, next) => {
       });
     }
 
-    const avatarPath = req.files?.avatar?.[0] ? `/uploads/${req.files.avatar[0].filename}` : (req.body.avatarUrl || req.body.avatar_url || null);
-    const documentPath = req.files?.document?.[0] ? `/uploads/${req.files.document[0].filename}` : (req.body.documentUrl || req.body.document_url || null);
+    let avatarPath = req.body.avatarUrl || req.body.avatar_url || null;
+    if (req.files?.avatar?.[0]) {
+      const upRes = await uploadMediaFile(req.files.avatar[0], 'avatars');
+      avatarPath = upRes?.url || `/uploads/${req.files.avatar[0].filename}`;
+    }
+
+    let documentPath = req.body.documentUrl || req.body.document_url || null;
+    if (req.files?.document?.[0]) {
+      const upRes = await uploadMediaFile(req.files.document[0], 'documents');
+      documentPath = upRes?.url || `/uploads/${req.files.document[0].filename}`;
+    }
 
     const [result] = await pool.query(
       'INSERT INTO residents (full_name, phone, email, address, notes, avatar_url, document_url) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -155,8 +165,21 @@ const updateTenant = async (req, res, next) => {
     const residentAddress = (address || '').trim();
     const residentEmail = email && email.trim() !== '' ? email.trim() : null;
     const residentNotes = notes && notes.trim() !== '' ? notes.trim() : null;
-    const avatarPath = req.files?.avatar?.[0] ? `/uploads/${req.files.avatar[0].filename}` : (req.body.avatarUrl !== undefined || req.body.avatar_url !== undefined ? (req.body.avatarUrl || req.body.avatar_url || '') : existing[0].avatar_url);
-    const documentPath = req.files?.document?.[0] ? `/uploads/${req.files.document[0].filename}` : (req.body.documentUrl !== undefined || req.body.document_url !== undefined ? (req.body.documentUrl || req.body.document_url || '') : existing[0].document_url);
+    let avatarPath = req.body.avatarUrl !== undefined || req.body.avatar_url !== undefined
+      ? (req.body.avatarUrl || req.body.avatar_url || '')
+      : existing[0].avatar_url;
+    if (req.files?.avatar?.[0]) {
+      const upRes = await uploadMediaFile(req.files.avatar[0], 'avatars');
+      avatarPath = upRes?.url || `/uploads/${req.files.avatar[0].filename}`;
+    }
+
+    let documentPath = req.body.documentUrl !== undefined || req.body.document_url !== undefined
+      ? (req.body.documentUrl || req.body.document_url || '')
+      : existing[0].document_url;
+    if (req.files?.document?.[0]) {
+      const upRes = await uploadMediaFile(req.files.document[0], 'documents');
+      documentPath = upRes?.url || `/uploads/${req.files.document[0].filename}`;
+    }
 
     if (!residentName || !residentPhone || !residentAddress) {
       return res.status(400).json({

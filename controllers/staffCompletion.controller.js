@@ -1,5 +1,6 @@
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
+const { uploadMediaFile } = require('../services/cloudinary.service');
 
 
 // Helper to resolve staff profile ID from logged in user ID
@@ -307,7 +308,8 @@ const uploadCompletionPhotos = async (req, res, next) => {
     const savedPhotos = [];
 
     for (const file of files) {
-      const fileUrl = `/uploads/${file.filename}`;
+      const uploadRes = await uploadMediaFile(file, 'completion');
+      const fileUrl = uploadRes?.url || `/uploads/${file.filename}`;
       const [mediaRes] = await pool.query(
         `INSERT INTO staff_completion_media 
           (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type)
@@ -731,7 +733,8 @@ const completeJobAtomic = async (req, res, next) => {
         if (req.files[cat]) {
           const type = cat === 'beforePhotos' ? 'BEFORE' : cat === 'afterPhotos' ? 'AFTER' : cat === 'receipts' ? 'RECEIPT' : 'OTHER';
           for (const file of req.files[cat]) {
-            const fileUrl = `/uploads/${file.filename}`;
+            const uploadRes = await uploadMediaFile(file, 'completion');
+            const fileUrl = uploadRes?.url || `/uploads/${file.filename}`;
             await connection.query(
               "INSERT INTO staff_completion_media (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
               [completionId, id, file.originalname, fileUrl, file.size, file.mimetype, type]
@@ -1007,7 +1010,8 @@ async function updateCompletedJobEvidence(req, res, next) {
         if (req.files[cat]) {
           const type = cat === 'beforePhotos' ? 'BEFORE' : cat === 'afterPhotos' ? 'AFTER' : 'RECEIPT';
           for (const file of req.files[cat]) {
-            const fileUrl = `/uploads/${file.filename}`;
+            const uploadRes = await uploadMediaFile(file, 'completion');
+            const fileUrl = uploadRes?.url || `/uploads/${file.filename}`;
             await connection.query(
               'INSERT INTO staff_completion_media (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
               [completionId, id, file.originalname, fileUrl, file.size, file.mimetype, type]

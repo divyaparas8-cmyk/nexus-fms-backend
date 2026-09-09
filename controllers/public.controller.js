@@ -3,6 +3,7 @@ const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { autoAssignTechnician, isAutoAssignmentEnabled } = require('../services/autoAssignment.service');
 const { dispatchN8NWebhook } = require('../services/webhook.service');
+const { uploadMediaFile } = require('../services/cloudinary.service');
 
 
 // @desc    Get public request information by secure token (NO LOGIN REQUIRED)
@@ -206,10 +207,11 @@ const submitPublicQuoteUpload = async (req, res, next) => {
 
     const savedMediaList = [];
 
-    // Save uploaded media files into customer_media_uploads
+    // Save uploaded media files into customer_media_uploads (with Cloudinary cloud storage)
     for (const file of files) {
       const mediaType = file.mimetype.startsWith('video') ? 'VIDEO' : 'PHOTO';
-      const fileUrl = `/uploads/${file.filename}`;
+      const uploadResult = await uploadMediaFile(file, 'quotes');
+      const fileUrl = uploadResult?.url || `/uploads/${file.filename}`;
 
       const [mediaRes] = await connection.query(
         `INSERT INTO customer_media_uploads 

@@ -3,6 +3,7 @@ const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const QuoteRequestService = require('../services/quoteRequest.service');
 const BookingRequestService = require('../services/bookingRequest.service');
+const { uploadMediaFile } = require('../services/cloudinary.service');
 
 
 // Helper to format any date input to strict YYYY-MM-DD
@@ -1146,7 +1147,12 @@ const cancelJob = async (req, res, next) => {
       ]
     );
 
-    let proofPath = req.file ? (req.file.path || req.file.filename) : null;
+    let proofPath = null;
+    if (req.file) {
+      const uploadRes = await uploadMediaFile(req.file, 'cancellations');
+      proofPath = uploadRes?.url || `/uploads/${req.file.filename}`;
+    }
+
     await connection.query(
       `INSERT INTO cancellation_history (
         work_order_id, cancelled_by_user_id, cancellation_type, reason, notes, proof_url
@@ -1160,7 +1166,7 @@ const cancelJob = async (req, res, next) => {
         `INSERT INTO cancellation_media_uploads (
           work_order_id, appointment_history_id, file_name, file_path, mime_type, file_size_bytes, uploaded_by
         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [id, historyResult.insertId, req.file.originalname, req.file.path, req.file.mimetype, req.file.size, req.user.id]
+        [id, historyResult.insertId, req.file.originalname, proofPath, req.file.mimetype, req.file.size, req.user.id]
       );
     }
 

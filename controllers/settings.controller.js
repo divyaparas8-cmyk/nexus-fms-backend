@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const { testCloudinaryConnection, clearConfigCache } = require('../services/cloudinary.service');
 
 // @desc    Get system settings
 // @route   GET /api/v1/settings
@@ -33,7 +34,26 @@ const updateSettings = async (req, res, next) => {
     // We update the existing row since there's only one active settings row
     await pool.query('UPDATE system_settings SET settings_json = ? ORDER BY id DESC LIMIT 1', [JSON.stringify(newSettings)]);
     
+    // Invalidate cached Cloudinary config so changes take effect immediately
+    clearConfigCache();
+
     res.status(200).json({ success: true, message: 'Settings updated successfully', data: newSettings });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Test Cloudinary credentials
+// @route   POST /api/v1/settings/test-cloudinary
+// @access  Private (Office Admin)
+const testCloudinary = async (req, res, next) => {
+  try {
+    const { cloudName, apiKey, apiSecret } = req.body;
+    const result = await testCloudinaryConnection({ cloudName, apiKey, apiSecret });
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.status(200).json(result);
   } catch (err) {
     next(err);
   }
@@ -41,5 +61,6 @@ const updateSettings = async (req, res, next) => {
 
 module.exports = {
   getSettings,
-  updateSettings
+  updateSettings,
+  testCloudinary,
 };
