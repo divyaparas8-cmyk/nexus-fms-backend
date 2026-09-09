@@ -112,23 +112,71 @@ const getStaff = async (req, res, next) => {
 const getStaffById = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const cleanId = id.replace(/^(stf-|usr-)/, '');
+    const strId = String(id);
 
-    const [rows] = await pool.query(
-      `SELECT 
-        u.id as user_id, u.email, u.avatar_url, u.full_name as name, u.phone, u.role, u.is_active,
-        sp.id as profile_id, sp.staff_code, sp.role_title, sp.color_hex,
-        sp.working_days_json, sp.work_start_time, sp.work_end_time,
-        sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
-        sp.kpi_score, sp.jobs_completed, sp.revisits,
-        sp.home_address, sp.home_postcode, sp.duty_status
-      FROM users u
-      LEFT JOIN staff_profiles sp ON u.id = sp.user_id
-      WHERE sp.id = ? OR u.id = ?`,
-      [cleanId, cleanId]
-    );
+    let rows;
+    if (strId.startsWith('stf-')) {
+      const cleanId = strId.replace('stf-', '');
+      [rows] = await pool.query(
+        `SELECT 
+          u.id as user_id, u.email, u.avatar_url, u.full_name as name, u.phone, u.role, u.is_active,
+          sp.id as profile_id, sp.staff_code, sp.role_title, sp.color_hex,
+          sp.working_days_json, sp.work_start_time, sp.work_end_time,
+          sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
+          sp.kpi_score, sp.jobs_completed, sp.revisits,
+          sp.home_address, sp.home_postcode, sp.duty_status
+        FROM staff_profiles sp
+        JOIN users u ON u.id = sp.user_id
+        WHERE sp.id = ?`,
+        [cleanId]
+      );
+    } else if (strId.startsWith('usr-')) {
+      const cleanId = strId.replace('usr-', '');
+      [rows] = await pool.query(
+        `SELECT 
+          u.id as user_id, u.email, u.avatar_url, u.full_name as name, u.phone, u.role, u.is_active,
+          sp.id as profile_id, sp.staff_code, sp.role_title, sp.color_hex,
+          sp.working_days_json, sp.work_start_time, sp.work_end_time,
+          sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
+          sp.kpi_score, sp.jobs_completed, sp.revisits,
+          sp.home_address, sp.home_postcode, sp.duty_status
+        FROM users u
+        LEFT JOIN staff_profiles sp ON u.id = sp.user_id
+        WHERE u.id = ?`,
+        [cleanId]
+      );
+    } else {
+      [rows] = await pool.query(
+        `SELECT 
+          u.id as user_id, u.email, u.avatar_url, u.full_name as name, u.phone, u.role, u.is_active,
+          sp.id as profile_id, sp.staff_code, sp.role_title, sp.color_hex,
+          sp.working_days_json, sp.work_start_time, sp.work_end_time,
+          sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
+          sp.kpi_score, sp.jobs_completed, sp.revisits,
+          sp.home_address, sp.home_postcode, sp.duty_status
+        FROM staff_profiles sp
+        JOIN users u ON u.id = sp.user_id
+        WHERE sp.id = ?`,
+        [id]
+      );
+      if (rows.length === 0) {
+        [rows] = await pool.query(
+          `SELECT 
+            u.id as user_id, u.email, u.avatar_url, u.full_name as name, u.phone, u.role, u.is_active,
+            sp.id as profile_id, sp.staff_code, sp.role_title, sp.color_hex,
+            sp.working_days_json, sp.work_start_time, sp.work_end_time,
+            sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json,
+            sp.kpi_score, sp.jobs_completed, sp.revisits,
+            sp.home_address, sp.home_postcode, sp.duty_status
+          FROM users u
+          LEFT JOIN staff_profiles sp ON u.id = sp.user_id
+          WHERE u.id = ?`,
+          [id]
+        );
+      }
+    }
 
-    if (rows.length === 0) {
+    if (!rows || rows.length === 0) {
       return res.status(404).json({
         success: false,
         message: `Staff profile not found with ID ${id}`,
@@ -304,15 +352,36 @@ const updateStaff = async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
     const { id } = req.params;
-    const cleanId = id.replace(/^(stf-|usr-)/, '');
+    const strId = String(id);
     const { full_name, name, phone, email, avatarUrl, avatar_url, role, role_title, color, workingDays, startTime, endTime, password, home_address, homeAddress, home_postcode, homePostcode, dutyStatus, duty_status } = req.body;
 
-    const [existing] = await connection.query(
-      'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ? OR sp.user_id = ?',
-      [cleanId, cleanId]
-    );
+    let existing;
+    if (strId.startsWith('stf-')) {
+      const cleanId = strId.replace('stf-', '');
+      [existing] = await connection.query(
+        'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ?',
+        [cleanId]
+      );
+    } else if (strId.startsWith('usr-')) {
+      const cleanId = strId.replace('usr-', '');
+      [existing] = await connection.query(
+        'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.user_id = ?',
+        [cleanId]
+      );
+    } else {
+      [existing] = await connection.query(
+        'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ?',
+        [id]
+      );
+      if (existing.length === 0) {
+        [existing] = await connection.query(
+          'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.user_id = ?',
+          [id]
+        );
+      }
+    }
 
-    if (existing.length === 0) {
+    if (!existing || existing.length === 0) {
       connection.release();
       return res.status(404).json({
         success: false,
@@ -331,13 +400,29 @@ const updateStaff = async (req, res, next) => {
       });
     }
 
-    await connection.beginTransaction();
-
     const profileId = existing[0].profile_id;
     const userId = existing[0].user_id;
     const staffName = (full_name || name || '').trim();
     const staffPhone = (phone || '').trim();
-    const staffEmail = (email || '').trim();
+    const staffEmail = (email || '').trim().toLowerCase();
+
+    // Prevent duplicate email constraint crash if updated email belongs to someone else
+    if (staffEmail) {
+      const [emailCheck] = await connection.query(
+        'SELECT id FROM users WHERE email = ? AND id != ?',
+        [staffEmail, userId]
+      );
+      if (emailCheck.length > 0) {
+        connection.release();
+        return res.status(400).json({
+          success: false,
+          message: `The email '${staffEmail}' is already used by another account. Please choose a different email.`
+        });
+      }
+    }
+
+    await connection.beginTransaction();
+
     let staffAvatar = (avatarUrl !== undefined || avatar_url !== undefined) ? (avatarUrl || avatar_url || '') : null;
     if (req.file) {
       const upRes = await uploadMediaFile(req.file, 'avatars');
@@ -413,14 +498,35 @@ const deleteStaff = async (req, res, next) => {
   const connection = await pool.getConnection();
   try {
     const { id } = req.params;
-    const cleanId = id.replace(/^(stf-|usr-)/, '');
+    const strId = String(id);
 
-    const [rows] = await connection.query(
-      'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ? OR sp.user_id = ?',
-      [cleanId, cleanId]
-    );
+    let rows;
+    if (strId.startsWith('stf-')) {
+      const cleanId = strId.replace('stf-', '');
+      [rows] = await connection.query(
+        'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ?',
+        [cleanId]
+      );
+    } else if (strId.startsWith('usr-')) {
+      const cleanId = strId.replace('usr-', '');
+      [rows] = await connection.query(
+        'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.user_id = ?',
+        [cleanId]
+      );
+    } else {
+      [rows] = await connection.query(
+        'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.id = ?',
+        [id]
+      );
+      if (rows.length === 0) {
+        [rows] = await connection.query(
+          'SELECT sp.id as profile_id, sp.user_id FROM staff_profiles sp WHERE sp.user_id = ?',
+          [id]
+        );
+      }
+    }
 
-    if (rows.length === 0) {
+    if (!rows || rows.length === 0) {
       connection.release();
       return res.status(404).json({
         success: false,
