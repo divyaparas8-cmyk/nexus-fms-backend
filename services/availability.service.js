@@ -37,7 +37,8 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
   const [staffRows] = await connection.query(
     `SELECT 
       sp.id, sp.user_id, sp.role_title, sp.working_days_json, sp.work_start_time, sp.work_end_time,
-      sp.break_start_time, sp.break_end_time, u.full_name as staff_name, u.email as staff_email
+      sp.break_start_time, sp.break_end_time, sp.unavailable_dates_json, sp.duty_status,
+      u.full_name as staff_name, u.email as staff_email
      FROM staff_profiles sp
      JOIN users u ON sp.user_id = u.id
      WHERE sp.id = ?`,
@@ -69,9 +70,34 @@ const calculateStaffAvailableSlots = async (staffProfileId, targetDate, duration
 
   // Check Working Day Requirement
   if (!workingDays.includes(dayAbbrev)) {
+    const isWknd = dayAbbrev === 'Sat' || dayAbbrev === 'Sun';
     return {
       success: true,
-      reason: `Date '${targetDate}' (${dayAbbrev}) is outside working days (${workingDays.join(', ')})`,
+      reason: isWknd 
+        ? `Staff is off on weekends (${dayAbbrev}). Working days: ${workingDays.join(', ')}`
+        : `Technician is off on ${dayAbbrev}s. Working days: ${workingDays.join(', ')}`,
+      availableSlots: [],
+    };
+  }
+
+  // Check Unavailable / Leave Dates
+  let unavail = staff.unavailable_dates_json;
+  if (typeof unavail === 'string') {
+    try { unavail = JSON.parse(unavail); } catch { unavail = []; }
+  }
+  if (Array.isArray(unavail) && unavail.includes(targetDate)) {
+    return {
+      success: true,
+      reason: `Technician is on leave / scheduled off on ${targetDate}`,
+      availableSlots: [],
+    };
+  }
+
+  // Check Duty Status
+  if (staff.duty_status === 'ON_LEAVE' || staff.duty_status === 'OFF_DUTY') {
+    return {
+      success: true,
+      reason: `Technician is currently ${staff.duty_status === 'ON_LEAVE' ? 'on leave' : 'off duty'}`,
       availableSlots: [],
     };
   }
@@ -221,10 +247,10 @@ const calculateMultiStaffAvailableSlots = async (
     `SELECT 
       sp.id, sp.user_id, sp.role_title, sp.working_days_json, sp.work_start_time, sp.work_end_time,
       sp.break_start_time, sp.break_end_time, sp.home_address, sp.home_postcode, sp.color_hex,
-      sp.duty_status, u.full_name as staff_name, u.email as staff_email, u.phone as staff_phone
+      sp.duty_status, sp.unavailable_dates_json, u.full_name as staff_name, u.email as staff_email, u.phone as staff_phone
      FROM staff_profiles sp
      JOIN users u ON sp.user_id = u.id
-     WHERE u.role = 'MAINTENANCE_STAFF'
+     WHERE u.role = 'MAINTENANCE_STAFF' AND (u.is_active = 1 OR u.is_active IS NULL)
      ORDER BY sp.id ASC`
   );
 
@@ -235,7 +261,7 @@ const calculateMultiStaffAvailableSlots = async (
       dayAbbrev,
       durationHours,
       availableSlots: [],
-      message: 'No technicians found in system directory.',
+      message: 'No active maintenance technicians found in system.',
       workingDaysInfo: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
     };
   }
@@ -259,10 +285,17 @@ const calculateMultiStaffAvailableSlots = async (
     }
     if (!Array.isArray(days)) days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
+    let unavail = staff.unavailable_dates_json;
+    if (typeof unavail === 'string') {
+      try { unavail = JSON.parse(unavail); } catch { unavail = []; }
+    }
+    const isDateUnavailable = Array.isArray(unavail) && unavail.includes(targetDate);
+    const isOffDutyOrLeave = staff.duty_status === 'ON_LEAVE' || staff.duty_status === 'OFF_DUTY';
+
     const isPreferred = cleanPrefId && (staff.id === cleanPrefId || staff.user_id === cleanPrefId);
     const skillScore = computeSkillMatchScore(staff.role_title, aiInfo.category, jobDesc);
     const proximityScore = computeProximityScore(staff.home_address, staff.home_postcode, jobAddress);
-    const worksOnDay = days.includes(dayAbbrev);
+    const worksOnDay = days.includes(dayAbbrev) && !isDateUnavailable && !isOffDutyOrLeave;
 
     let totalScore = skillScore + proximityScore;
     if (isPreferred) totalScore += 1000;
@@ -272,6 +305,8 @@ const calculateMultiStaffAvailableSlots = async (
       ...staff,
       workingDays: days,
       worksOnDay,
+      isDateUnavailable,
+      isOffDutyOrLeave,
       isPreferred,
       skillScore,
       proximityScore,
@@ -286,17 +321,22 @@ const calculateMultiStaffAvailableSlots = async (
   // Collect all working days across the team
   const allTeamWorkingDays = Array.from(new Set(rankedStaff.flatMap(s => s.workingDays)));
 
-  // Filter staff who work on targetDate
+  // Filter staff who actually work and are available on targetDate
   const availableStaffOnDay = rankedStaff.filter(s => s.worksOnDay);
 
   if (availableStaffOnDay.length === 0) {
+    const isWeekend = dayAbbrev === 'Sat' || dayAbbrev === 'Sun';
+    const reasonMsg = isWeekend
+      ? `Staff is off on weekends (${dayAbbrev}). Please select a working day (${allTeamWorkingDays.join(', ')}).`
+      : `No maintenance technicians are available on ${dayAbbrev}, ${targetDate} (All staff are off, on leave, or outside scheduled days). Please choose another date.`;
+
     return {
       success: true,
       targetDate,
       dayAbbrev,
       durationHours,
       availableSlots: [],
-      message: `Technicians are not scheduled to work on ${dayAbbrev}s. Active work days: ${allTeamWorkingDays.join(', ')}.`,
+      message: reasonMsg,
       workingDaysInfo: allTeamWorkingDays,
       aiCategory: aiInfo.category,
       rankedStaff: rankedStaff.map(s => ({

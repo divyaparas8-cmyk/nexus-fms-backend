@@ -495,23 +495,30 @@ const submitPublicBooking = async (req, res, next) => {
       }
     }
 
-    // Validate Slot Availability & Overlapping Booking Prevention
-    if (assignedStaffId) {
-      const availabilityResult = await calculateStaffAvailableSlots(assignedStaffId, dateVal, durationHours, connection);
-      const isSlotValid = availabilityResult.availableSlots?.some(s => 
-        s.timeSlot === slotVal || 
-        s.startTime === slotVal || 
-        (s.startTime && slotVal.startsWith(s.startTime))
-      );
+    if (!assignedStaffId) {
+      await connection.rollback();
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: `Booking Rejected: No technicians are scheduled or available on ${dateVal}. Please choose a working date.`,
+      });
+    }
 
-      if (!isSlotValid && availabilityResult.availableSlots && availabilityResult.availableSlots.length > 0) {
-        await connection.rollback();
-        connection.release();
-        return res.status(400).json({
-          success: false,
-          message: `Booking Rejected: Slot '${slotVal}' on ${dateVal} is no longer available (Outside shift, during break, or already booked).`,
-        });
-      }
+    // Validate Slot Availability & Overlapping Booking Prevention
+    const availabilityResult = await calculateStaffAvailableSlots(assignedStaffId, dateVal, durationHours, connection);
+    const isSlotValid = availabilityResult.availableSlots?.some(s => 
+      s.timeSlot === slotVal || 
+      s.startTime === slotVal || 
+      (s.startTime && slotVal.startsWith(s.startTime))
+    );
+
+    if (!isSlotValid) {
+      await connection.rollback();
+      connection.release();
+      return res.status(400).json({
+        success: false,
+        message: availabilityResult.reason || `Booking Rejected: Time slot '${slotVal}' on ${dateVal} is not available (Outside shift, technician is off, or already booked).`,
+      });
     }
 
     if (requestId) {
