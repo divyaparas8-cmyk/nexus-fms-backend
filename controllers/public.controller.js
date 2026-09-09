@@ -554,7 +554,7 @@ const submitPublicBooking = async (req, res, next) => {
 
     if (targetStaffId) {
       const [techRows] = await connection.query(
-        `SELECT sp.id, sp.user_id, u.full_name, u.email, u.phone as user_phone, sp.phone as staff_phone 
+        `SELECT sp.id, sp.user_id, u.full_name, u.email, u.phone 
          FROM staff_profiles sp 
          JOIN users u ON sp.user_id = u.id 
          WHERE sp.id = ?`,
@@ -563,7 +563,7 @@ const submitPublicBooking = async (req, res, next) => {
       if (techRows.length > 0) {
         techName = techRows[0].full_name;
         techEmail = techRows[0].email;
-        techPhone = techRows[0].staff_phone || techRows[0].user_phone;
+        techPhone = techRows[0].phone;
         techUserId = techRows[0].user_id;
       }
     }

@@ -417,7 +417,7 @@ const dispatchJob = async (req, res, next) => {
     // Create Notification for the assigned staff
     try {
       const [staffUserRows] = await pool.query(
-        "SELECT sp.id, sp.user_id, sp.phone as staff_phone, u.full_name, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?",
+        "SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?",
         [finalStaffId]
       );
       

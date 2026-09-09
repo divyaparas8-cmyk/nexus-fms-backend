@@ -513,7 +513,7 @@ const createJob = async (req, res, next) => {
 
     if (rawStaffId) {
       const [spUser] = await pool.query(
-        'SELECT sp.id, sp.user_id, sp.phone as staff_phone, u.full_name, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
+        'SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
         [rawStaffId]
       );
       if (spUser.length > 0) {
@@ -886,7 +886,7 @@ const updateJobStatus = async (req, res, next) => {
 
       if (targetStaffId !== null && targetStaffId !== undefined) {
         const [spUser] = await pool.query(
-          'SELECT sp.id, sp.user_id, sp.phone as staff_phone, u.full_name, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
+          'SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
           [targetStaffId]
         );
         if (spUser.length > 0) {

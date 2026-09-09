@@ -18,7 +18,7 @@ async function getWorkOrderRecord() {
   try {
     const [jobs] = await pool.query(
       `SELECT wo.id, wo.job_number, wo.title, wo.property_address, wo.priority,
-              sp.id as staff_id, sp.phone as staff_phone,
+              sp.id as staff_id, u.phone as staff_phone,
               u.full_name as staff_name, u.email as staff_email, u.phone as user_phone
        FROM work_orders wo
        JOIN staff_profiles sp ON wo.assigned_staff_id = sp.id

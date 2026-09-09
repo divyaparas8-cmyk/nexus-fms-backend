@@ -160,15 +160,14 @@ const notificationService = {
           if (recipientUserId && (!n8nPayload.technicianName || !n8nPayload.technicianPhone)) {
             try {
               const [techRows] = await db.query(
-                `SELECT u.full_name, u.phone, u.email, sp.phone as staff_phone 
+                `SELECT u.full_name, u.phone, u.email 
                  FROM users u 
-                 LEFT JOIN staff_profiles sp ON sp.user_id = u.id 
                  WHERE u.id = ?`,
                 [recipientUserId]
               );
               if (techRows.length > 0) {
                 n8nPayload.technicianName = n8nPayload.technicianName || techRows[0].full_name;
-                n8nPayload.technicianPhone = n8nPayload.technicianPhone || techRows[0].staff_phone || techRows[0].phone;
+                n8nPayload.technicianPhone = n8nPayload.technicianPhone || techRows[0].phone;
                 n8nPayload.contactPhone = n8nPayload.contactPhone || n8nPayload.technicianPhone;
               }
             } catch (tErr) {
