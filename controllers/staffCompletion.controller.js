@@ -21,7 +21,7 @@ const getStaffProfileId = async (userId) => {
 
 
 // Helper to format raw database row to Frontend job object
-const formatJobRow = (r) => ({
+const formatJobRow = (r, mediaList = []) => ({
   id: r.id,
   jobNumber: r.job_number,
   section: r.pipeline_stage,
@@ -42,6 +42,14 @@ const formatJobRow = (r) => ({
   scheduledTimeSlot: r.scheduled_time_slot || null,
   secureToken: r.secure_token,
   createdAt: r.created_at ? String(r.created_at).substring(0, 10) : null,
+  residentPhotos: mediaList.map(m => ({
+    id: m.id,
+    fileName: m.file_name,
+    filePath: m.file_path,
+    mediaType: m.media_type || 'PHOTO',
+    createdAt: m.created_at
+  })),
+  photoUrls: mediaList.map(m => m.file_path)
 });
 
 // @desc    Get all work orders assigned to the authenticated technician
@@ -85,7 +93,24 @@ const getMyAssignedJobs = async (req, res, next) => {
     sql += ' ORDER BY w.created_at DESC';
 
     const [rows] = await pool.query(sql, queryParams);
-    const jobs = rows.map(formatJobRow);
+
+    // Batch query customer_media_uploads for all jobs
+    let mediaByJob = {};
+    if (rows.length > 0) {
+      const jobIds = rows.map(r => r.id);
+      const [mediaRows] = await pool.query(
+        `SELECT id, work_order_id, file_name, file_path, media_type, created_at 
+         FROM customer_media_uploads 
+         WHERE work_order_id IN (?)`,
+        [jobIds]
+      );
+      for (const m of mediaRows) {
+        if (!mediaByJob[m.work_order_id]) mediaByJob[m.work_order_id] = [];
+        mediaByJob[m.work_order_id].push(m);
+      }
+    }
+
+    const jobs = rows.map(r => formatJobRow(r, mediaByJob[r.id] || []));
 
     res.status(200).json({
       success: true,
@@ -147,9 +172,16 @@ const getMyAssignedJobById = async (req, res, next) => {
       });
     }
 
+    const [mediaRows] = await pool.query(
+      `SELECT id, work_order_id, file_name, file_path, media_type, created_at 
+       FROM customer_media_uploads 
+       WHERE work_order_id = ?`,
+      [job.id]
+    );
+
     res.status(200).json({
       success: true,
-      data: formatJobRow(job),
+      data: formatJobRow(job, mediaRows),
     });
   } catch (err) {
     next(err);

@@ -250,12 +250,13 @@ const submitPublicQuoteUpload = async (req, res, next) => {
 
     // Automatically generate booking request if not exists
     const [existingBooking] = await connection.query(
-      'SELECT id FROM booking_requests WHERE work_order_id = ?',
+      'SELECT id, secure_token FROM booking_requests WHERE work_order_id = ?',
       [workOrderId]
     );
 
+    let bookingToken = null;
     if (existingBooking.length === 0) {
-      const bookingToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
+      bookingToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7); // Default 7 days expiry
 
@@ -264,6 +265,12 @@ const submitPublicQuoteUpload = async (req, res, next) => {
           work_order_id, secure_token, earliest_date, status, expires_at
         ) VALUES (?, ?, CURDATE(), 'WAITING_FOR_BOOKING', ?)`,
         [workOrderId, bookingToken, expiresAt]
+      );
+    } else {
+      bookingToken = existingBooking[0].secure_token;
+      await connection.query(
+        `UPDATE booking_requests SET status = 'WAITING_FOR_BOOKING' WHERE id = ? AND status != 'BOOKED'`,
+        [existingBooking[0].id]
       );
     }
 
@@ -278,12 +285,54 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     const jobTitle = wo.title || 'Repair Job';
     const resName = wo.resident_name || 'Resident';
     const resAddress = wo.property_address || 'Property';
+    const resPhone = wo.contact_phone || wo.resident_phone;
+    const resEmail = wo.contact_email || wo.resident_email;
 
-    let autoAssignOutcome = null;
+    const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+    const bookingAppointmentUrl = `${frontendBase}/booking/${bookingToken}`;
 
+    // 1. Notify Resident/Tenant via SMS & Email to select appointment date & time
+    if (resPhone || resEmail) {
+      await notificationService.dispatch({
+        recipientUserId: null,
+        recipientRole: 'TENANT',
+        type: 'BOOKING_REQUEST',
+        title: 'Please Select Your Maintenance Appointment',
+        messageTemplate: `Hi ${resName},\n\nWe received your photos for "${jobTitle}". Please select a convenient date and time for your maintenance visit using this secure link:\n${bookingAppointmentUrl}\n\nThank you,\nNexus FMS Team`,
+        structuredData: {
+          resident_name: resName,
+          bookingLink: bookingAppointmentUrl,
+          actionUrl: bookingAppointmentUrl,
+          workOrderId: workOrderId,
+          jobNumber: wo.job_number,
+          title: jobTitle,
+          address: resAddress,
+        },
+        actionUrl: bookingAppointmentUrl,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL', 'SMS'],
+        contactEmail: resEmail,
+        contactPhone: resPhone,
+        connection
+      }).catch(err => console.error('[Tenant Booking Notification Dispatch Error]', err));
+    }
+
+    // 2. Notify Admins that quote photos were submitted
+    for (const admin of admins) {
+      await notificationService.createNotification({
+        recipientUserId: admin.id,
+        type: 'QUOTE_PHOTOS_SUBMITTED',
+        title: 'Quote photos/details received',
+        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order moved to Completed Quotes. Booking link active.`,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        actionUrl: `/admin/quote-requests`
+      }, connection);
+    }
+
+    // 3. If a technician was already pre-assigned to this job, notify them of newly added photos
     if (wo.assigned_staff_id) {
-      // Existing assigned technician: NEVER reassign automatically.
-      // Save new photos (already done) and notify the existing technician that new photos were added.
       const [techUser] = await connection.query(
         `SELECT sp.user_id, u.full_name, u.email, u.phone 
          FROM staff_profiles sp 
@@ -299,130 +348,43 @@ const submitPublicQuoteUpload = async (req, res, next) => {
           message: `Tenant uploaded ${savedMediaList.length} new photo(s) for task "${jobTitle}" at ${resAddress}.`,
           relatedEntityType: 'work_orders',
           relatedEntityId: workOrderId,
-          actionUrl: '/maintenance/my-tasks',
+          actionUrl: `/jobs/${workOrderId}`,
         }, connection);
       }
-    } else if (isAutoAssignmentEnabled()) {
-      // Work order is unassigned and auto-assignment feature is enabled:
-      try {
-        const assignResult = await autoAssignTechnician(workOrderId, connection);
-        autoAssignOutcome = assignResult;
-
-        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
-        const directJobActionUrl = `${frontendBase}/jobs/${workOrderId}`;
-
-        if (assignResult.assigned) {
-          // Notify the newly assigned technician in-app (skipWebhook to avoid duplicate dispatch before transaction commit)
-          await notificationService.createNotification({
-            recipientUserId: assignResult.userId,
-            type: 'TASK_ASSIGNED',
-            title: 'New task automatically assigned',
-            message: `You have been automatically assigned to ${jobTitle} at ${resAddress}`,
-            relatedEntityType: 'work_orders',
-            relatedEntityId: workOrderId,
-            actionUrl: directJobActionUrl,
-            skipWebhook: true,
-          }, connection);
-        } else {
-          // No technician available: Do NOT fail upload. Leave assigned_staff_id NULL.
-          // Dispatch AUTO_ASSIGN_FAILED notification to Office Admins
-          for (const admin of admins) {
-            await notificationService.createNotification({
-              recipientUserId: admin.id,
-              type: 'AUTO_ASSIGN_FAILED',
-              title: 'Auto-assignment Unsuccessful',
-              message: `Auto-assignment could not find an available technician for "${jobTitle}" (${assignResult.tradeCategory || 'Repair'}). Reason: ${assignResult.reason}. Please assign manually.`,
-              relatedEntityType: 'work_orders',
-              relatedEntityId: workOrderId,
-              actionUrl: '/admin/pipeline',
-            }, connection);
-          }
-        }
-      } catch (assignErr) {
-        console.error('[AutoAssignment] Error during quote upload auto-assignment:', assignErr);
-        // Tenant upload must succeed even if auto-assignment encounters an error
-      }
-    }
-
-    for (const admin of admins) {
-      await notificationService.createNotification({
-        recipientUserId: admin.id,
-        type: 'QUOTE_PHOTOS_SUBMITTED',
-        title: 'Quote photos/details received',
-        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order moved to Completed Quotes.`,
-        relatedEntityType: 'work_orders',
-        relatedEntityId: workOrderId,
-        actionUrl: `/admin/quote-requests`
-      }, connection);
     }
 
     await connection.commit();
     connection.release();
 
-    // Dispatch n8n automation events after successful commit
-    if (autoAssignOutcome) {
-      if (autoAssignOutcome.assigned) {
-        // Phase 4: TASK_ASSIGNED with complete real data and direct actionUrl
-        const photoUrls = savedMediaList.map((m) => m.filePath);
-        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
-        const directJobActionUrl = `${frontendBase}/jobs/${wo.id}`;
-
-        const taskAssignedPayload = {
-          entityId: wo.id,
-          workOrderId: wo.id,
-          jobNumber: wo.job_number,
-          title: wo.title,
-          message: `New task assigned: ${wo.title} at ${wo.property_address}`,
-          tradeCategory: autoAssignOutcome.tradeCategory,
-          priority: wo.priority || 'NORMAL',
-          propertyAddress: wo.property_address,
-          residentName: wo.resident_name,
-          residentNotes: userNotes || '',
-          photoCount: savedMediaList.length,
-          photoUrls,
-          technicianName: autoAssignOutcome.staffName,
-          technicianEmail: autoAssignOutcome.staffEmail,
-          technicianPhone: autoAssignOutcome.staffPhone,
-          technician: {
-            id: autoAssignOutcome.staffProfileId,
-            name: autoAssignOutcome.staffName,
-            email: autoAssignOutcome.staffEmail,
-            phone: autoAssignOutcome.staffPhone,
-          },
-          assignmentType: 'AUTO_SKILL_MATCH',
-          matchScore: autoAssignOutcome.matchScore,
-          selectionReason: autoAssignOutcome.reason,
-          actionUrl: directJobActionUrl,
-        };
-        dispatchN8NWebhook('TASK_ASSIGNED', taskAssignedPayload).catch((err) => {
-          console.warn('[N8N_DISPATCH_WARN] Failed to dispatch TASK_ASSIGNED webhook:', err.message);
-        });
-      } else if (!autoAssignOutcome.alreadyAssigned) {
-        // AUTO_ASSIGN_FAILED event for Office Admin automation
-        const autoAssignFailedPayload = {
-          workOrderId: wo.id,
-          jobNumber: wo.job_number,
-          title: wo.title,
-          tradeCategory: autoAssignOutcome.tradeCategory || null,
-          priority: wo.priority || 'NORMAL',
-          propertyAddress: wo.property_address,
-          residentName: wo.resident_name,
-          residentNotes: userNotes || '',
-          photoCount: savedMediaList.length,
-          failureReason: autoAssignOutcome.reason,
-          actionUrl: '/admin/pipeline',
-        };
-        dispatchN8NWebhook('AUTO_ASSIGN_FAILED', autoAssignFailedPayload).catch((err) => {
-          console.warn('[N8N_DISPATCH_WARN] Failed to dispatch AUTO_ASSIGN_FAILED webhook:', err.message);
-        });
-      }
-    }
+    // 4. Dispatch BOOKING_REQUEST event to N8N webhook
+    const bookingRequestWebhookPayload = {
+      event: 'BOOKING_REQUEST',
+      type: 'BOOKING_REQUEST',
+      workOrderId: wo.id,
+      jobNumber: wo.job_number,
+      title: wo.title,
+      propertyAddress: wo.property_address,
+      residentName: wo.resident_name,
+      contactPhone: resPhone,
+      contactEmail: resEmail,
+      residentNotes: userNotes || '',
+      bookingToken,
+      bookingLink: bookingAppointmentUrl,
+      actionUrl: bookingAppointmentUrl,
+      photoCount: savedMediaList.length,
+      photoUrls: savedMediaList.map(m => m.filePath),
+    };
+    dispatchN8NWebhook('BOOKING_REQUEST', bookingRequestWebhookPayload).catch(err => {
+      console.warn('[N8N_DISPATCH_WARN] Failed to dispatch BOOKING_REQUEST webhook:', err.message);
+    });
 
     res.status(200).json({
       success: true,
       message: 'Photo/Video report submitted successfully.',
       data: {
         workOrderId,
+        bookingToken,
+        bookingUrl: bookingAppointmentUrl,
         filesUploaded: savedMediaList.length,
         media: savedMediaList,
       },
@@ -511,10 +473,21 @@ const submitPublicBooking = async (req, res, next) => {
       });
     }
 
+    // Extract preferred or selected staff from request body if passed
+    const staffIdFromBody = req.body.assignedStaffId || req.body.assigned_staff_id;
+    if (staffIdFromBody && staffIdFromBody !== 'ANY') {
+      const parsedId = parseInt(String(staffIdFromBody).replace('stf-', ''), 10);
+      if (!isNaN(parsedId)) assignedStaffId = parsedId;
+    }
+
     // Auto-assign best available technician for this slot if not pre-assigned
     if (!assignedStaffId) {
       const multiAvail = await calculateMultiStaffAvailableSlots(dateVal, durationHours, null, jobDetails, connection);
-      const matchingSlot = multiAvail.availableSlots.find(s => s.timeSlot === slotVal || s.startTime === slotVal);
+      const matchingSlot = multiAvail.availableSlots?.find(s => 
+        s.timeSlot === slotVal || 
+        s.startTime === slotVal || 
+        (s.startTime && slotVal.startsWith(s.startTime))
+      );
       if (matchingSlot && matchingSlot.assignedStaffId) {
         assignedStaffId = matchingSlot.assignedStaffId;
       } else if (multiAvail.recommendedStaff) {
@@ -525,9 +498,13 @@ const submitPublicBooking = async (req, res, next) => {
     // Validate Slot Availability & Overlapping Booking Prevention
     if (assignedStaffId) {
       const availabilityResult = await calculateStaffAvailableSlots(assignedStaffId, dateVal, durationHours, connection);
-      const isSlotValid = availabilityResult.availableSlots.some(s => s.timeSlot === slotVal || s.startTime === slotVal);
+      const isSlotValid = availabilityResult.availableSlots?.some(s => 
+        s.timeSlot === slotVal || 
+        s.startTime === slotVal || 
+        (s.startTime && slotVal.startsWith(s.startTime))
+      );
 
-      if (!isSlotValid) {
+      if (!isSlotValid && availabilityResult.availableSlots && availabilityResult.availableSlots.length > 0) {
         await connection.rollback();
         connection.release();
         return res.status(400).json({
@@ -558,16 +535,48 @@ const submitPublicBooking = async (req, res, next) => {
     );
 
     const [woRows] = await connection.query(
-      "SELECT title, resident_name, property_address, assigned_staff_id, manager_name, manager_email, job_number FROM work_orders WHERE id = ?",
+      "SELECT title, resident_name, contact_phone, contact_email, property_address, assigned_staff_id, manager_name, manager_email, job_number, description, priority FROM work_orders WHERE id = ?",
       [workOrderId]
     );
     const jobTitle = woRows[0]?.title || 'Repair Job';
     const resName = woRows[0]?.resident_name || 'Resident';
     const resAddress = woRows[0]?.property_address || 'Property';
-    const targetStaffId = woRows[0]?.assigned_staff_id;
+    const targetStaffId = assignedStaffId || woRows[0]?.assigned_staff_id;
     const mgrName = woRows[0]?.manager_name || 'Manager';
     const mgrEmail = woRows[0]?.manager_email;
     const jobNum = woRows[0]?.job_number || '';
+
+    // Fetch technician details for notification
+    let techName = 'Technician';
+    let techEmail = null;
+    let techPhone = null;
+    let techUserId = null;
+
+    if (targetStaffId) {
+      const [techRows] = await connection.query(
+        `SELECT sp.id, sp.user_id, u.full_name, u.email, u.phone as user_phone, sp.phone as staff_phone 
+         FROM staff_profiles sp 
+         JOIN users u ON sp.user_id = u.id 
+         WHERE sp.id = ?`,
+        [targetStaffId]
+      );
+      if (techRows.length > 0) {
+        techName = techRows[0].full_name;
+        techEmail = techRows[0].email;
+        techPhone = techRows[0].staff_phone || techRows[0].user_phone;
+        techUserId = techRows[0].user_id;
+      }
+    }
+
+    // Fetch tenant uploaded photos for technician evidence
+    const [customerMediaRows] = await connection.query(
+      'SELECT file_path FROM customer_media_uploads WHERE work_order_id = ?',
+      [workOrderId]
+    );
+    const photoUrls = customerMediaRows.map(m => m.file_path);
+
+    const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+    const directJobActionUrl = `${frontendBase}/jobs/${workOrderId}`;
 
     // 1. Notify Admins
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
@@ -576,33 +585,78 @@ const submitPublicBooking = async (req, res, next) => {
         recipientUserId: admin.id,
         type: 'BOOKING_CONFIRMED',
         title: 'New booking confirmed',
-        message: `${jobTitle} booked on ${dateVal} at ${slotVal} for ${resName}`,
+        message: `${jobTitle} booked on ${dateVal} at ${slotVal} for ${resName} (Assigned: ${techName})`,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         actionUrl: `/admin/calendar`
       }, connection);
     }
 
-    // 2. Notify assigned technician if present
-    if (targetStaffId) {
-      const [spUser] = await connection.query('SELECT user_id FROM staff_profiles WHERE id = ?', [targetStaffId]);
-      if (spUser.length > 0) {
-        await notificationService.createNotification({
-          recipientUserId: spUser[0].user_id,
-          type: 'BOOKING_CONFIRMED',
-          title: 'Resident booking confirmed',
-          message: `Booking confirmed for ${jobTitle} on ${dateVal} at ${slotVal}`,
-          relatedEntityType: 'work_orders',
-          relatedEntityId: workOrderId,
-          actionUrl: `/maintenance/my-tasks`
-        }, connection);
-      }
+    // 2. Notify assigned technician via SMS, Email, and In-App
+    if (techUserId || techEmail || techPhone) {
+      await notificationService.dispatch({
+        recipientUserId: techUserId,
+        recipientRole: 'MAINTENANCE_STAFF',
+        type: 'TASK_ASSIGNED',
+        title: `New Task Assigned: ${jobTitle}`,
+        messageTemplate: `Hi ${techName},\n\nYou have been assigned a new maintenance job:\nJob: ${jobTitle}\nAddress: ${resAddress}\nScheduled: ${dateVal} (${slotVal})\n\nView details & tenant photos: ${directJobActionUrl}`,
+        structuredData: {
+          technicianName: techName,
+          title: jobTitle,
+          propertyAddress: resAddress,
+          scheduledDate: dateVal,
+          scheduledTimeSlot: slotVal,
+          actionUrl: directJobActionUrl,
+          residentName: resName,
+          residentPhone: woRows[0]?.contact_phone,
+          photoCount: photoUrls.length,
+          photoUrls
+        },
+        actionUrl: directJobActionUrl,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL', 'SMS', 'IN_APP'],
+        contactEmail: techEmail,
+        contactPhone: techPhone,
+        technicianName: techName,
+        technicianPhone: techPhone,
+        propertyAddress: resAddress,
+        connection
+      }).catch(err => console.error('[Tech Booking Notification Dispatch Error]', err));
     }
 
-    // 3. Email confirmation to the manager who requested the works
+    // 3. Send appointment confirmation SMS & Email to Tenant
+    const resPhone = woRows[0]?.contact_phone;
+    const resEmail = woRows[0]?.contact_email;
+    if (resPhone || resEmail) {
+      await notificationService.dispatch({
+        recipientUserId: null,
+        recipientRole: 'TENANT',
+        type: 'BOOKING_CONFIRMED',
+        title: 'Maintenance Appointment Confirmed',
+        messageTemplate: `Hi ${resName},\n\nYour maintenance appointment for "${jobTitle}" at ${resAddress} is confirmed for ${dateVal} (${slotVal}).\nAssigned Technician: ${techName}.\n\nThank you,\nNexus FMS Team`,
+        structuredData: {
+          resident_name: resName,
+          title: jobTitle,
+          address: resAddress,
+          scheduled_date: dateVal,
+          scheduled_time_slot: slotVal,
+          technician_name: techName
+        },
+        actionUrl: `/booking/${token}`,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: workOrderId,
+        channels: ['EMAIL', 'SMS'],
+        contactEmail: resEmail,
+        contactPhone: resPhone,
+        connection
+      }).catch(err => console.error('[Tenant Booking Confirmation Notification Error]', err));
+    }
+
+    // 4. Email confirmation to the manager who requested the works
     if (mgrEmail) {
       const emailSubject = `Booking Confirmed: Job #${jobNum} - ${jobTitle}`;
-      const emailBody = `Dear ${mgrName},\n\nThe resident (${resName}) has scheduled their booking for ${jobTitle} at ${resAddress}.\n\nScheduled Date: ${dateVal}\nTime Slot: ${slotVal}\n\nThank you,\nNexus FMS Team`;
+      const emailBody = `Dear ${mgrName},\n\nThe resident (${resName}) has scheduled their booking for ${jobTitle} at ${resAddress}.\n\nScheduled Date: ${dateVal}\nTime Slot: ${slotVal}\nAssigned Staff: ${techName}\n\nThank you,\nNexus FMS Team`;
 
       await notificationService.dispatch({
         recipientUserId: null,
@@ -627,6 +681,42 @@ const submitPublicBooking = async (req, res, next) => {
 
     await connection.commit();
     connection.release();
+
+    // 5. Dispatch TASK_ASSIGNED webhook to N8N
+    const taskAssignedPayload = {
+      event: 'TASK_ASSIGNED',
+      type: 'TASK_ASSIGNED',
+      entityId: workOrderId,
+      workOrderId: workOrderId,
+      jobNumber: jobNum,
+      title: jobTitle,
+      message: `New task assigned: ${jobTitle} at ${resAddress} scheduled for ${dateVal} (${slotVal})`,
+      scheduledDate: dateVal,
+      scheduledTimeSlot: slotVal,
+      priority: woRows[0]?.priority || 'NORMAL',
+      propertyAddress: resAddress,
+      residentName: resName,
+      residentPhone: woRows[0]?.contact_phone,
+      residentEmail: woRows[0]?.contact_email,
+      residentNotes: woRows[0]?.description || '',
+      photoCount: photoUrls.length,
+      photoUrls,
+      technicianName: techName,
+      technicianEmail: techEmail,
+      technicianPhone: techPhone,
+      technician: {
+        id: targetStaffId,
+        name: techName,
+        email: techEmail,
+        phone: techPhone,
+      },
+      assignmentType: 'TENANT_BOOKING_SLOT_MATCH',
+      actionUrl: directJobActionUrl,
+    };
+
+    dispatchN8NWebhook('TASK_ASSIGNED', taskAssignedPayload).catch(err => {
+      console.warn('[N8N_DISPATCH_WARN] Failed to dispatch TASK_ASSIGNED webhook:', err.message);
+    });
 
     res.status(200).json({
       success: true,

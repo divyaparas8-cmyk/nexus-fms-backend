@@ -221,6 +221,35 @@ const notificationService = {
               n8nPayload.data.uploadLink = uploadUrl;
             }
           }
+        } else if (type === 'BOOKING_REQUEST') {
+          const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+          const workOrderId = relatedEntityId || n8nPayload.entityId;
+          n8nPayload.workOrderId = workOrderId;
+          n8nPayload.entityId = workOrderId;
+
+          // Resolve secure_token from booking_requests if missing
+          let token = n8nPayload.data?.bookingToken || n8nPayload.data?.secure_token || n8nPayload.secureToken || null;
+          if (!token && workOrderId) {
+            try {
+              const [bRows] = await db.query(
+                'SELECT secure_token FROM booking_requests WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 1',
+                [workOrderId]
+              );
+              if (bRows.length > 0) token = bRows[0].secure_token;
+            } catch (e) {}
+          }
+
+          if (token) {
+            const bookingUrl = `${frontendBase}/booking/${token}`;
+            n8nPayload.actionUrl = bookingUrl;
+            n8nPayload.bookingUrl = bookingUrl;
+            n8nPayload.bookingLink = bookingUrl;
+            if (n8nPayload.data) {
+              n8nPayload.data.actionUrl = bookingUrl;
+              n8nPayload.data.bookingUrl = bookingUrl;
+              n8nPayload.data.bookingLink = bookingUrl;
+            }
+          }
         }
 
         dispatchN8NWebhook(type, n8nPayload).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));

@@ -23,9 +23,20 @@ const getBookingRequests = async (req, res, next) => {
         w.property_address as address,
         w.description as description,
         w.resident_id as tenantId,
-        w.duration_hours as durationHours
+        COALESCE(w.duration_hours, 1.5) as durationHours,
+        COALESCE(u.full_name, 'Auto-assigned on booking') as assignedStaffName,
+        CASE 
+          WHEN b.status = 'BOOKED' THEN JSON_OBJECT(
+            'date', b.booked_date,
+            'timeSlot', b.booked_time_slot,
+            'staffName', u.full_name
+          )
+          ELSE NULL 
+        END as bookingDetails
       FROM booking_requests b
       JOIN work_orders w ON b.work_order_id = w.id
+      LEFT JOIN staff_profiles sp ON (w.assigned_staff_id = sp.id OR b.assignment_preference_staff_id = sp.id)
+      LEFT JOIN users u ON sp.user_id = u.id
       ORDER BY b.created_at DESC
     `);
 
