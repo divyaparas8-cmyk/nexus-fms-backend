@@ -37,8 +37,8 @@ const triggerAutoBookingRequest = async (workOrderId) => {
     );
 
     // 5. Send Notification
-    const publicAppUrl = process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
-    const bookingLink = `${publicAppUrl}/public/book-appointment/${token}`;
+    const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+    const bookingLink = `${frontendBase}/public/book-appointment/${token}`;
 
     const dispatcher = require('./notification.service');
     

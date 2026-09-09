@@ -68,8 +68,8 @@ const runBookingReminderJob = async () => {
             );
 
             // Send notification through central dispatcher
-            const publicAppUrl = process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'http://localhost:5173';
-            const bookingLink = `${publicAppUrl}/public/book-appointment/${req.secure_token}`;
+            const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+            const bookingLink = `${frontendBase}/public/book-appointment/${req.secure_token}`;
 
             const dispatcher = require('../services/notification.service');
             

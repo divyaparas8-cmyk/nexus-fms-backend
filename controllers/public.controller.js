@@ -269,7 +269,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
 
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
     const [woRows] = await connection.query(
-      `SELECT id, job_number, title, priority, property_address, resident_name, resident_phone, resident_email, assigned_staff_id, description, detected_category 
+      `SELECT id, job_number, title, priority, property_address, resident_name, contact_phone, contact_phone as resident_phone, contact_email, contact_email as resident_email, assigned_staff_id, description 
        FROM work_orders 
        WHERE id = ?`,
       [workOrderId]

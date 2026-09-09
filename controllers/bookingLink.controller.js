@@ -131,14 +131,7 @@ const generateBookingLink = async (req, res, next) => {
     await connection.commit();
     connection.release();
 
-    const referer = req.get('referer') || 'http://localhost:5173/';
-    let frontendOrigin = 'http://localhost:5173';
-    try {
-      frontendOrigin = new URL(referer).origin;
-    } catch (e) {
-      // ignore
-    }
-
+    const frontendOrigin = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
     const publicUrl = `${frontendOrigin}/booking/${secureToken}`;
     const tenantName = resident.full_name;
     const address = resident.address;
