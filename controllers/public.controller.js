@@ -861,9 +861,132 @@ const generatePublicRequestLink = async (req, res, next) => {
   }
 };
 
+// @desc    Get Public Job Completion Report (Evidence Photos, Staff Work Proof, Materials & Payment)
+// @route   GET /api/v1/public/jobs/:id/report
+// @access  Public (No Login Required)
+const getPublicJobCompletionReport = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // 1. Fetch work order details
+    const [jobs] = await pool.query(
+      `SELECT w.*,
+              r.full_name as live_resident_name, r.phone as live_contact_phone, r.email as live_contact_email,
+              u.full_name as technician_name, u.phone as technician_phone, u.email as technician_email,
+              sp.staff_code, sp.role_title
+       FROM work_orders w
+       LEFT JOIN residents r ON w.resident_id = r.id
+       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+       LEFT JOIN users u ON sp.user_id = u.id
+       WHERE w.id = ?`,
+      [id]
+    );
+
+    if (jobs.length === 0) {
+      return res.status(404).json({ success: false, message: `Work order not found with ID ${id}.` });
+    }
+
+    const job = jobs[0];
+
+    // 2. Fetch Completion Report, Media & Materials in parallel
+    const [[completionReports], [staffMedia], [customerMedia], [materialsRows]] = await Promise.all([
+      pool.query('SELECT * FROM staff_job_completions WHERE work_order_id = ? ORDER BY id DESC LIMIT 1', [id]),
+      pool.query('SELECT id, file_name, file_path, media_type, created_at FROM staff_completion_media WHERE work_order_id = ?', [id]),
+      pool.query('SELECT id, file_name, file_path, media_type, created_at FROM customer_media_uploads WHERE work_order_id = ?', [id]),
+      pool.query('SELECT id, material_name, quantity, unit_cost, total_cost, receipt_path FROM job_material_costs WHERE work_order_id = ?', [id])
+    ]);
+
+    const completion = completionReports.length > 0 ? completionReports[0] : null;
+
+    // Filter staff photos into before, after, receipts
+    const beforePhotos = staffMedia.filter(m => m.media_type === 'BEFORE');
+    const afterPhotos = staffMedia.filter(m => m.media_type === 'AFTER');
+    const staffReceipts = staffMedia.filter(m => m.media_type === 'RECEIPT');
+
+    const materials = materialsRows.map(m => ({
+      id: m.id,
+      materialName: m.material_name,
+      quantity: parseFloat(m.quantity) || 1,
+      unitCost: parseFloat(m.unit_cost) || 0,
+      totalCost: parseFloat(m.total_cost) || 0,
+      receiptPath: m.receipt_path
+    }));
+
+    const totalMaterialCost = materials.reduce((acc, curr) => acc + curr.totalCost, 0);
+
+    const residentName = job.live_resident_name || job.resident_name || 'Resident';
+    const residentPhone = job.live_contact_phone || job.contact_phone || '';
+    const residentEmail = job.live_contact_email || job.contact_email || '';
+
+    res.status(200).json({
+      success: true,
+      data: {
+        id: job.id,
+        jobNumber: job.job_number || `JOB-${job.id}`,
+        title: job.title,
+        description: job.description,
+        propertyAddress: job.property_address,
+        pipelineStage: job.pipeline_stage,
+        priority: job.priority,
+        scheduledDate: job.scheduled_date,
+        scheduledTimeSlot: job.scheduled_time_slot,
+        completedAt: completion?.completed_at || job.updated_at,
+        resident: {
+          name: residentName,
+          phone: residentPhone,
+          email: residentEmail
+        },
+        technician: {
+          name: job.technician_name || 'Assigned Technician',
+          phone: job.technician_phone || '',
+          email: job.technician_email || '',
+          staffCode: job.staff_code || '',
+          roleTitle: job.role_title || 'Maintenance Technician'
+        },
+        report: completion ? {
+          summary: completion.work_report_summary,
+          status: completion.completion_status,
+          materialsNote: completion.materials_used
+        } : null,
+        residentPhotos: customerMedia.map(m => ({
+          id: m.id,
+          fileName: m.file_name,
+          filePath: m.file_path,
+          mediaType: m.media_type,
+          createdAt: m.created_at
+        })),
+        beforePhotos: beforePhotos.map(m => ({
+          id: m.id,
+          fileName: m.file_name,
+          filePath: m.file_path,
+          createdAt: m.created_at
+        })),
+        afterPhotos: afterPhotos.map(m => ({
+          id: m.id,
+          fileName: m.file_name,
+          filePath: m.file_path,
+          createdAt: m.created_at
+        })),
+        receiptPhotos: staffReceipts.map(m => ({
+          id: m.id,
+          fileName: m.file_name,
+          filePath: m.file_path,
+          createdAt: m.created_at
+        })),
+        materials,
+        totalMaterialCost,
+        currency: '₹'
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getPublicRequestByToken,
   submitPublicQuoteUpload,
   submitPublicBooking,
   generatePublicRequestLink,
+  getPublicJobCompletionReport,
 };

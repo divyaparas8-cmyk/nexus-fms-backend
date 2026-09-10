@@ -428,15 +428,17 @@ const notificationService = {
             n8nPayload.data.timeSlot = timeVal;
             n8nPayload.data.scheduledTimeSlot = timeVal;
           }
-        } else if (type === 'JOB_COMPLETED') {
+        } else if (type === 'JOB_COMPLETED' || type === 'STAFF_JOB_DONE') {
           const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
           const workOrderId = relatedEntityId || n8nPayload.entityId;
           n8nPayload.workOrderId = workOrderId;
           n8nPayload.entityId = workOrderId;
           n8nPayload.reference = workOrderId ? `work_orders #${workOrderId}` : null;
-          n8nPayload.actionUrl = workOrderId ? `${frontendBase}/jobs/${workOrderId}` : `${frontendBase}/admin/pipeline?stage=Completed Jobs`;
+          n8nPayload.actionUrl = workOrderId ? `${frontendBase}/jobs/${workOrderId}/report` : `${frontendBase}/admin/pipeline?stage=Completed Jobs`;
+          n8nPayload.reportUrl = n8nPayload.actionUrl;
+          n8nPayload.pdfReportUrl = n8nPayload.actionUrl;
 
-          if (workOrderId && (!n8nPayload.residentName || !n8nPayload.propertyAddress || !n8nPayload.technicianName)) {
+          if (workOrderId) {
             try {
               const [woRows] = await db.query(
                 `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.contact_phone, w.contact_email,
@@ -454,12 +456,30 @@ const notificationService = {
                 n8nPayload.jobNumber = n8nPayload.jobNumber || r.job_number;
                 n8nPayload.title = n8nPayload.title || r.title;
                 n8nPayload.propertyAddress = n8nPayload.propertyAddress || r.property_address;
-                n8nPayload.residentName = n8nPayload.residentName || r.live_res_name || r.resident_name;
-                n8nPayload.residentPhone = n8nPayload.residentPhone || r.live_res_phone || r.contact_phone;
-                n8nPayload.residentEmail = n8nPayload.residentEmail || r.live_res_email || r.contact_email;
                 n8nPayload.technicianName = n8nPayload.technicianName || r.tech_name;
                 n8nPayload.technicianPhone = n8nPayload.technicianPhone || r.tech_phone;
                 n8nPayload.technicianEmail = n8nPayload.technicianEmail || r.tech_email;
+
+                if (recipientRole === 'MAINTENANCE_STAFF') {
+                  // CRUCIAL: Staff recipient must be greeted with staff name (e.g. lightlab)
+                  const staffDisplayName = n8nPayload.technicianName || r.tech_name || 'Technician';
+                  n8nPayload.name = staffDisplayName;
+                  n8nPayload.recipientName = staffDisplayName;
+                  n8nPayload.staffName = staffDisplayName;
+                  n8nPayload.residentName = staffDisplayName; // Overrides residentName so N8N greeting says 'Dear lightlab'
+                  n8nPayload.tenantName = r.live_res_name || r.resident_name;
+                } else if (recipientRole === 'OFFICE_ADMIN' || recipientRole === 'OFFICE_TEAM') {
+                  n8nPayload.name = 'Admin';
+                  n8nPayload.recipientName = 'Admin';
+                  n8nPayload.residentName = 'Team';
+                  n8nPayload.tenantName = r.live_res_name || r.resident_name;
+                } else {
+                  n8nPayload.residentName = n8nPayload.residentName || r.live_res_name || r.resident_name;
+                  n8nPayload.residentPhone = n8nPayload.residentPhone || r.live_res_phone || r.contact_phone;
+                  n8nPayload.residentEmail = n8nPayload.residentEmail || r.live_res_email || r.contact_email;
+                  n8nPayload.name = n8nPayload.residentName;
+                  n8nPayload.recipientName = n8nPayload.residentName;
+                }
               }
             } catch (e) {
               console.warn('[NotificationService] Could not enrich JOB_COMPLETED info:', e.message);
@@ -473,8 +493,13 @@ const notificationService = {
           if (n8nPayload.data && typeof n8nPayload.data === 'object') {
             n8nPayload.data.workOrderId = workOrderId;
             n8nPayload.data.actionUrl = n8nPayload.actionUrl;
+            n8nPayload.data.reportUrl = n8nPayload.actionUrl;
+            n8nPayload.data.pdfReportUrl = n8nPayload.actionUrl;
             n8nPayload.data.reference = n8nPayload.reference;
             n8nPayload.data.residentName = n8nPayload.residentName;
+            n8nPayload.data.name = n8nPayload.name;
+            n8nPayload.data.recipientName = n8nPayload.recipientName;
+            n8nPayload.data.staffName = n8nPayload.staffName || n8nPayload.technicianName;
             n8nPayload.data.residentPhone = n8nPayload.residentPhone;
             n8nPayload.data.residentEmail = n8nPayload.residentEmail;
             n8nPayload.data.technicianName = n8nPayload.technicianName;

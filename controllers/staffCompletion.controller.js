@@ -561,6 +561,8 @@ const markJobComplete = async (req, res, next) => {
     const techPhone = updatedJob?.staff_phone || null;
     const techEmail = updatedJob?.staff_email || null;
 
+    const completionReportUrl = `${frontendBase}/jobs/${id}/report`;
+
     // 1. Notify Tenant (Mukul)
     const tenantMessage = `Dear ${tenantName}, your repair job #${jobNumber} ("${jobTitle}") at ${propAddress} has been successfully completed by technician ${finalTechName}. Thank you for choosing Nexus FMS!`;
     await notificationService.createNotification({
@@ -573,15 +575,18 @@ const markJobComplete = async (req, res, next) => {
       contactEmail: tenantEmail,
       technicianName: finalTechName,
       technicianPhone: techPhone,
+      name: tenantName,
       propertyAddress: propAddress,
       relatedEntityType: 'work_orders',
       relatedEntityId: parseInt(id, 10),
-      channels: (tenantPhone || tenantEmail) ? ['SMS', 'EMAIL'] : ['IN_APP'],
+      channels: ['IN_APP'], // In-app record only; dedicated single N8N webhook below handles SMS/Email
+      skipWebhook: true,
       data: {
         workOrderId: parseInt(id, 10),
         jobNumber: jobNumber,
         title: jobTitle,
         residentName: tenantName,
+        name: tenantName,
         residentPhone: tenantPhone,
         residentEmail: tenantEmail,
         technicianName: finalTechName,
@@ -590,48 +595,56 @@ const markJobComplete = async (req, res, next) => {
       }
     });
 
-    // 2. Notify Staff (Technician)
+    // 2. Notify Staff (Technician e.g. lightlab)
     const staffMessage = `Great work ${finalTechName}! You have successfully completed Job #${jobNumber}: "${jobTitle}" at ${propAddress}. Your work report has been recorded.`;
     if (techUserId) {
       await notificationService.createNotification({
         recipientUserId: techUserId,
         recipientRole: 'MAINTENANCE_STAFF',
-        type: 'JOB_COMPLETED',
+        type: 'STAFF_JOB_DONE',
         title: `Job #${jobNumber} Completed`,
         message: staffMessage,
         contactPhone: techPhone,
         contactEmail: techEmail,
         technicianName: finalTechName,
+        technicianPhone: techPhone,
+        name: finalTechName,
         propertyAddress: propAddress,
         relatedEntityType: 'work_orders',
         relatedEntityId: parseInt(id, 10),
         actionUrl: `/maintenance/my-tasks`,
         channels: ['IN_APP', 'SMS', 'EMAIL'],
+        skipWebhook: true,
         data: {
           workOrderId: parseInt(id, 10),
           jobNumber: jobNumber,
           title: jobTitle,
-          residentName: tenantName,
+          staffName: finalTechName,
+          name: finalTechName,
+          recipientName: finalTechName,
           technicianName: finalTechName,
+          residentName: finalTechName, // Crucial: prevents template from greeting tenant on staff notifications
+          tenantName: tenantName,
           propertyAddress: propAddress,
           status: 'COMPLETED'
         }
       });
     }
 
-    // 3. Notify Admins
+    // 3. Notify Admins (Internal in-app only, skip duplicate external webhook)
     const [admins] = await pool.query("SELECT id FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
     for (const admin of admins) {
       await notificationService.createNotification({
         recipientUserId: admin.id,
         recipientRole: 'OFFICE_ADMIN',
-        type: 'JOB_COMPLETED',
+        type: 'JOB_COMPLETED_ADMIN',
         title: 'Technician task completed',
         message: `Task #${jobNumber} "${jobTitle}" was marked completed by ${finalTechName}`,
         relatedEntityType: 'work_orders',
         relatedEntityId: parseInt(id, 10),
         actionUrl: `/admin/pipeline?stage=Completed Jobs`,
         channels: ['IN_APP'],
+        skipWebhook: true,
         data: {
           workOrderId: parseInt(id, 10),
           jobNumber: jobNumber,
@@ -643,7 +656,7 @@ const markJobComplete = async (req, res, next) => {
       });
     }
 
-    // 4. Dispatch N8N Webhook
+    // 4. Dispatch single dedicated N8N Webhook for Tenant JOB_COMPLETED (Only ONCE to prevent duplicate SMS/email)
     dispatchN8NWebhook('JOB_COMPLETED', {
       event: 'JOB_COMPLETED',
       type: 'JOB_COMPLETED',
@@ -653,15 +666,24 @@ const markJobComplete = async (req, res, next) => {
       title: jobTitle,
       message: `Job #${jobNumber} ("${jobTitle}") completed by ${finalTechName} for resident ${tenantName}`,
       residentName: tenantName,
+      name: tenantName,
+      recipientName: tenantName,
       residentPhone: tenantPhone,
       residentEmail: tenantEmail,
+      contactPhone: tenantPhone,
+      contactEmail: tenantEmail,
+      to: tenantPhone,
+      phone: tenantPhone,
+      email: tenantEmail,
       technicianName: finalTechName,
       technicianPhone: techPhone,
       technicianEmail: techEmail,
       propertyAddress: propAddress,
       status: 'COMPLETED',
       completedAt: new Date().toISOString(),
-      actionUrl: `${frontendBase}/jobs/${id}`
+      actionUrl: completionReportUrl,
+      reportUrl: completionReportUrl,
+      pdfReportUrl: completionReportUrl
     }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
 
     res.status(200).json({
@@ -979,12 +1001,14 @@ const completeJobAtomic = async (req, res, next) => {
         propertyAddress: propertyAddress,
         relatedEntityType: 'work_orders',
         relatedEntityId: parseInt(id, 10),
-        channels: (tenantPhone || tenantEmail) ? ['SMS', 'EMAIL'] : ['IN_APP'],
+        channels: ['IN_APP'], // In-app notification record only; dedicated single N8N webhook below handles SMS/Email to resident
+        skipWebhook: true, // Internal notification; dedicated N8N webhook dispatched once below
         data: {
           workOrderId: parseInt(id, 10),
           jobNumber: jobNumber,
           title: job.title,
           residentName: tenantName,
+          name: tenantName,
           residentPhone: tenantPhone,
           residentEmail: tenantEmail,
           technicianName: techName,
@@ -1001,25 +1025,30 @@ const completeJobAtomic = async (req, res, next) => {
         await notificationService.createNotification({
           recipientUserId: techUserId,
           recipientRole: 'MAINTENANCE_STAFF',
-          type: 'JOB_COMPLETED',
+          type: 'STAFF_JOB_DONE',
           title: `Job #${jobNumber} Completed`,
           message: staffMessage,
           contactPhone: techPhone,
           contactEmail: techEmail,
           technicianName: techName,
           technicianPhone: techPhone,
+          name: techName,
           propertyAddress: propertyAddress,
           relatedEntityType: 'work_orders',
           relatedEntityId: parseInt(id, 10),
           actionUrl: `/maintenance/my-tasks`,
           channels: ['IN_APP', 'SMS', 'EMAIL'],
+          skipWebhook: true,
           data: {
             workOrderId: parseInt(id, 10),
             jobNumber: jobNumber,
             title: job.title,
-            residentName: tenantName,
-            residentPhone: tenantPhone,
+            staffName: techName,
+            name: techName,
+            recipientName: techName,
             technicianName: techName,
+            residentName: techName, // Crucial: prevents template from greeting tenant on staff notifications
+            tenantName: tenantName,
             propertyAddress: propertyAddress,
             completionReport: completion_report ? completion_report.trim() : '',
             status: 'COMPLETED'
@@ -1027,19 +1056,20 @@ const completeJobAtomic = async (req, res, next) => {
         });
       }
 
-      // 3. Send to Office Admins & Office Team
+      // 3. Send to Office Admins & Office Team (Internal in-app only, skip external N8N webhook)
       const [admins] = await pool.query("SELECT id FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
       for (const admin of admins) {
         await notificationService.createNotification({
           recipientUserId: admin.id,
           recipientRole: 'OFFICE_ADMIN',
-          type: 'JOB_COMPLETED',
+          type: 'JOB_COMPLETED_ADMIN',
           title: 'Technician task completed',
           message: `Task #${jobNumber} "${job.title}" was marked completed by ${techName}.`,
           relatedEntityType: 'work_orders',
           relatedEntityId: parseInt(id, 10),
           actionUrl: `/admin/pipeline?stage=Completed Jobs`,
           channels: ['IN_APP'],
+          skipWebhook: true,
           data: {
             workOrderId: parseInt(id, 10),
             jobNumber: jobNumber,
@@ -1051,7 +1081,8 @@ const completeJobAtomic = async (req, res, next) => {
         });
       }
 
-      // 4. Dispatch dedicated N8N Webhook for JOB_COMPLETED
+      // 4. Dispatch dedicated N8N Webhook for JOB_COMPLETED (Only ONCE to prevent duplicate SMS/email)
+      const completionReportUrl = `${frontendBase}/jobs/${id}/report`;
       dispatchN8NWebhook('JOB_COMPLETED', {
         event: 'JOB_COMPLETED',
         type: 'JOB_COMPLETED',
@@ -1061,8 +1092,15 @@ const completeJobAtomic = async (req, res, next) => {
         title: job.title,
         message: `Job #${jobNumber} ("${job.title}") completed by ${techName} for resident ${tenantName}`,
         residentName: tenantName,
+        name: tenantName,
+        recipientName: tenantName,
         residentPhone: tenantPhone,
         residentEmail: tenantEmail,
+        contactPhone: tenantPhone,
+        contactEmail: tenantEmail,
+        to: tenantPhone,
+        phone: tenantPhone,
+        email: tenantEmail,
         technicianName: techName,
         technicianPhone: techPhone,
         technicianEmail: techEmail,
@@ -1070,7 +1108,9 @@ const completeJobAtomic = async (req, res, next) => {
         completionReport: completion_report ? completion_report.trim() : '',
         status: 'COMPLETED',
         completedAt: new Date().toISOString(),
-        actionUrl: `${frontendBase}/jobs/${id}`
+        actionUrl: completionReportUrl,
+        reportUrl: completionReportUrl,
+        pdfReportUrl: completionReportUrl
       }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
 
     } catch(err) {

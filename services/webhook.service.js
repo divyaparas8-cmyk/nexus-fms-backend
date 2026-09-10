@@ -200,7 +200,10 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       formattedPayload.entityId = formattedPayload.entityId || workOrderId;
       formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
       formattedPayload.reference = formattedPayload.reference || `work_orders #${workOrderId}`;
-      formattedPayload.actionUrl = `${frontendBase}/jobs/${workOrderId}`;
+      const reportUrl = `${frontendBase}/jobs/${workOrderId}/report`;
+      formattedPayload.actionUrl = reportUrl;
+      formattedPayload.reportUrl = reportUrl;
+      formattedPayload.pdfReportUrl = reportUrl;
     }
 
     formattedPayload.technicianName = formattedPayload.technicianName || formattedPayload.technician?.name || null;
@@ -237,6 +240,10 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       }
     }
 
+    // Default recipient name to residentName for tenant completion notification
+    formattedPayload.name = formattedPayload.name || formattedPayload.recipientName || formattedPayload.residentName;
+    formattedPayload.recipientName = formattedPayload.name;
+
     formattedPayload.status = 'COMPLETED';
     formattedPayload.pipelineStage = 'Completed Jobs';
     formattedPayload.pipeline_stage = 'Completed Jobs';
@@ -247,8 +254,12 @@ const dispatchN8NWebhook = async (eventType, payload) => {
 
     if (formattedPayload.data && typeof formattedPayload.data === 'object') {
       formattedPayload.data.actionUrl = formattedPayload.actionUrl;
+      formattedPayload.data.reportUrl = formattedPayload.actionUrl;
+      formattedPayload.data.pdfReportUrl = formattedPayload.actionUrl;
       formattedPayload.data.workOrderId = workOrderId;
       formattedPayload.data.reference = formattedPayload.reference;
+      formattedPayload.data.name = formattedPayload.name;
+      formattedPayload.data.recipientName = formattedPayload.recipientName;
       formattedPayload.data.technicianName = formattedPayload.technicianName;
       formattedPayload.data.technicianPhone = formattedPayload.technicianPhone;
       formattedPayload.data.technicianEmail = formattedPayload.technicianEmail;
