@@ -549,7 +549,14 @@ const createJob = async (req, res, next) => {
           title: jobTitle,
           message: newAssignMsg,
           scheduledDate: schedDate || null,
+          scheduled_date: schedDate || null,
+          date: schedDate || null,
+          scheduledTime: schedSlot || null,
+          scheduled_time: schedSlot || null,
           scheduledTimeSlot: schedSlot || null,
+          scheduled_time_slot: schedSlot || null,
+          time: schedSlot || null,
+          timeSlot: schedSlot || null,
           priority: jobPriority,
           propertyAddress: resAddress,
           residentName: resName,
@@ -710,6 +717,66 @@ const moveJobStage = async (req, res, next) => {
       }
     } catch (notifErr) {
       console.error('[Notification] Failed to notify on pipeline update:', notifErr);
+    }
+
+    // If stage moved to Completed Jobs, notify Tenant and Staff as well as N8N
+    if (normalizedStage === 'Completed Jobs' && existing[0].pipeline_stage !== 'Completed Jobs') {
+      try {
+        const row = updatedRows[0];
+        const tName = row?.live_resident_name || row?.resident_name || 'Resident';
+        const tPhone = row?.live_contact_phone || row?.contact_phone || null;
+        const tEmail = row?.live_contact_email || row?.contact_email || null;
+        const pAddress = row?.live_property_address || row?.property_address || '';
+        const jNum = row?.job_number || id;
+        const techStaffName = row?.staff_name || 'Technician';
+
+        // Notify Tenant (Mukul)
+        notificationService.createNotification({
+          recipientRole: 'TENANT',
+          recipientUserId: null,
+          type: 'JOB_COMPLETED',
+          title: `Repair Job Completed: #${jNum}`,
+          message: `Dear ${tName}, your repair job #${jNum} ("${row?.title}") at ${pAddress} has been completed by technician ${techStaffName}. Thank you!`,
+          contactPhone: tPhone,
+          contactEmail: tEmail,
+          technicianName: techStaffName,
+          propertyAddress: pAddress,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: parseInt(id, 10),
+          channels: (tPhone || tEmail) ? ['SMS', 'EMAIL'] : ['IN_APP'],
+          data: {
+            workOrderId: parseInt(id, 10),
+            jobNumber: jNum,
+            title: row?.title,
+            residentName: tName,
+            residentPhone: tPhone,
+            residentEmail: tEmail,
+            technicianName: techStaffName,
+            propertyAddress: pAddress,
+            status: 'COMPLETED'
+          }
+        }).catch(err => console.warn('[JOB_COMPLETED_NOTIF_WARN] Tenant notification failed:', err.message));
+
+        // Dispatch N8N Webhook
+        dispatchN8NWebhook('JOB_COMPLETED', {
+          event: 'JOB_COMPLETED',
+          type: 'JOB_COMPLETED',
+          entityId: parseInt(id, 10),
+          workOrderId: parseInt(id, 10),
+          jobNumber: jNum,
+          title: row?.title,
+          message: `Job #${jNum} ("${row?.title}") completed by ${techStaffName} for resident ${tName}`,
+          residentName: tName,
+          residentPhone: tPhone,
+          residentEmail: tEmail,
+          technicianName: techStaffName,
+          propertyAddress: pAddress,
+          status: 'COMPLETED',
+          completedAt: new Date().toISOString()
+        }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
+      } catch (e) {
+        console.warn('[moveJobStage] Error dispatching completed job events:', e.message);
+      }
     }
 
     res.status(200).json({
@@ -1011,7 +1078,14 @@ const updateJobStatus = async (req, res, next) => {
             title: existingJob.title,
             message: newAssignMsg,
             scheduledDate: effectiveDate,
+            scheduled_date: effectiveDate,
+            date: effectiveDate,
+            scheduledTime: effectiveSlot,
+            scheduled_time: effectiveSlot,
             scheduledTimeSlot: effectiveSlot,
+            scheduled_time_slot: effectiveSlot,
+            time: effectiveSlot,
+            timeSlot: effectiveSlot,
             priority: existingJob.priority || 'NORMAL',
             propertyAddress: existingJob.property_address,
             residentName: existingJob.resident_name || resNameVal || 'Resident',

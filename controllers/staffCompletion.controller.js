@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
+const { dispatchN8NWebhook } = require('../services/webhook.service');
 
 
 // Helper to resolve staff profile ID from logged in user ID
@@ -527,19 +528,6 @@ const markJobComplete = async (req, res, next) => {
       if (techUser.length > 0) techName = techUser[0].full_name;
     }
 
-    const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
-    for (const admin of admins) {
-      await notificationService.createNotification({
-        recipientUserId: admin.id,
-        type: 'JOB_COMPLETED',
-        title: 'Technician task completed',
-        message: `Task "${jobTitle}" was marked completed by ${techName}`,
-        relatedEntityType: 'work_orders',
-        relatedEntityId: id,
-        actionUrl: `/admin/pipeline?stage=Completed Jobs`
-      });
-    }
-
     const [updatedJobRows] = await pool.query(
       `SELECT 
         w.*,
@@ -547,7 +535,10 @@ const markJobComplete = async (req, res, next) => {
         r.phone as live_contact_phone,
         r.email as live_contact_email,
         r.address as live_property_address,
+        u.id as staff_user_id,
         u.full_name as staff_name,
+        u.phone as staff_phone,
+        u.email as staff_email,
         sp.color_hex as staff_color,
         sp.staff_code
        FROM work_orders w
@@ -557,6 +548,121 @@ const markJobComplete = async (req, res, next) => {
        WHERE w.id = ?`,
       [id]
     );
+
+    const updatedJob = updatedJobRows[0];
+    const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+    const tenantName = updatedJob?.live_resident_name || updatedJob?.resident_name || 'Resident';
+    const tenantPhone = updatedJob?.live_contact_phone || updatedJob?.contact_phone || null;
+    const tenantEmail = updatedJob?.live_contact_email || updatedJob?.contact_email || null;
+    const propAddress = updatedJob?.live_property_address || updatedJob?.property_address || '';
+    const jobNumber = updatedJob?.job_number || id;
+    const finalTechName = updatedJob?.staff_name || techName || 'Technician';
+    const techUserId = updatedJob?.staff_user_id || null;
+    const techPhone = updatedJob?.staff_phone || null;
+    const techEmail = updatedJob?.staff_email || null;
+
+    // 1. Notify Tenant (Mukul)
+    const tenantMessage = `Dear ${tenantName}, your repair job #${jobNumber} ("${jobTitle}") at ${propAddress} has been successfully completed by technician ${finalTechName}. Thank you for choosing Nexus FMS!`;
+    await notificationService.createNotification({
+      recipientRole: 'TENANT',
+      recipientUserId: null,
+      type: 'JOB_COMPLETED',
+      title: `Repair Job Completed: #${jobNumber}`,
+      message: tenantMessage,
+      contactPhone: tenantPhone,
+      contactEmail: tenantEmail,
+      technicianName: finalTechName,
+      technicianPhone: techPhone,
+      propertyAddress: propAddress,
+      relatedEntityType: 'work_orders',
+      relatedEntityId: parseInt(id, 10),
+      channels: (tenantPhone || tenantEmail) ? ['SMS', 'EMAIL'] : ['IN_APP'],
+      data: {
+        workOrderId: parseInt(id, 10),
+        jobNumber: jobNumber,
+        title: jobTitle,
+        residentName: tenantName,
+        residentPhone: tenantPhone,
+        residentEmail: tenantEmail,
+        technicianName: finalTechName,
+        propertyAddress: propAddress,
+        status: 'COMPLETED'
+      }
+    });
+
+    // 2. Notify Staff (Technician)
+    const staffMessage = `Great work ${finalTechName}! You have successfully completed Job #${jobNumber}: "${jobTitle}" at ${propAddress}. Your work report has been recorded.`;
+    if (techUserId) {
+      await notificationService.createNotification({
+        recipientUserId: techUserId,
+        recipientRole: 'MAINTENANCE_STAFF',
+        type: 'JOB_COMPLETED',
+        title: `Job #${jobNumber} Completed`,
+        message: staffMessage,
+        contactPhone: techPhone,
+        contactEmail: techEmail,
+        technicianName: finalTechName,
+        propertyAddress: propAddress,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: parseInt(id, 10),
+        actionUrl: `/maintenance/my-tasks`,
+        channels: ['IN_APP', 'SMS', 'EMAIL'],
+        data: {
+          workOrderId: parseInt(id, 10),
+          jobNumber: jobNumber,
+          title: jobTitle,
+          residentName: tenantName,
+          technicianName: finalTechName,
+          propertyAddress: propAddress,
+          status: 'COMPLETED'
+        }
+      });
+    }
+
+    // 3. Notify Admins
+    const [admins] = await pool.query("SELECT id FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
+    for (const admin of admins) {
+      await notificationService.createNotification({
+        recipientUserId: admin.id,
+        recipientRole: 'OFFICE_ADMIN',
+        type: 'JOB_COMPLETED',
+        title: 'Technician task completed',
+        message: `Task #${jobNumber} "${jobTitle}" was marked completed by ${finalTechName}`,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: parseInt(id, 10),
+        actionUrl: `/admin/pipeline?stage=Completed Jobs`,
+        channels: ['IN_APP'],
+        data: {
+          workOrderId: parseInt(id, 10),
+          jobNumber: jobNumber,
+          title: jobTitle,
+          technicianName: finalTechName,
+          residentName: tenantName,
+          status: 'COMPLETED'
+        }
+      });
+    }
+
+    // 4. Dispatch N8N Webhook
+    dispatchN8NWebhook('JOB_COMPLETED', {
+      event: 'JOB_COMPLETED',
+      type: 'JOB_COMPLETED',
+      entityId: parseInt(id, 10),
+      workOrderId: parseInt(id, 10),
+      jobNumber: jobNumber,
+      title: jobTitle,
+      message: `Job #${jobNumber} ("${jobTitle}") completed by ${finalTechName} for resident ${tenantName}`,
+      residentName: tenantName,
+      residentPhone: tenantPhone,
+      residentEmail: tenantEmail,
+      technicianName: finalTechName,
+      technicianPhone: techPhone,
+      technicianEmail: techEmail,
+      propertyAddress: propAddress,
+      status: 'COMPLETED',
+      completedAt: new Date().toISOString(),
+      actionUrl: `${frontendBase}/jobs/${id}`
+    }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
 
     res.status(200).json({
       success: true,
@@ -728,7 +834,16 @@ const completeJobAtomic = async (req, res, next) => {
 
     await connection.beginTransaction();
 
-    const [jobRows] = await connection.query('SELECT id, assigned_staff_id, assigned_staff_ids, pipeline_stage, title FROM work_orders WHERE id = ? FOR UPDATE', [id]);
+    const [jobRows] = await connection.query(
+      `SELECT w.id, w.job_number, w.title, w.description, w.property_address, w.pipeline_stage, 
+              w.assigned_staff_id, w.assigned_staff_ids, w.resident_id, w.resident_name, 
+              w.contact_phone, w.contact_email,
+              r.full_name as live_resident_name, r.phone as live_contact_phone, r.email as live_contact_email, r.address as live_property_address
+       FROM work_orders w
+       LEFT JOIN residents r ON w.resident_id = r.id
+       WHERE w.id = ? FOR UPDATE`,
+      [id]
+    );
     if (jobRows.length === 0) {
       throw { status: 404, message: `Work order not found with ID ${id}` };
     }
@@ -836,22 +951,130 @@ const completeJobAtomic = async (req, res, next) => {
     await connection.commit();
     connection.release();
 
-    // Notifications
+    // Notifications to Tenant, Staff, and Admins
     try {
+      const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+      const tenantName = job.live_resident_name || job.resident_name || 'Resident';
+      const tenantPhone = job.live_contact_phone || job.contact_phone || null;
+      const tenantEmail = job.live_contact_email || job.contact_email || null;
+      const propertyAddress = job.live_property_address || job.property_address || '';
+      const jobNumber = job.job_number || id;
+      const techName = req.user?.full_name || 'Technician';
+      const techPhone = req.user?.phone || null;
+      const techEmail = req.user?.email || null;
+      const techUserId = req.user?.id || null;
+
+      // 1. Send SMS / Email to Tenant (e.g. Mukul)
+      const tenantMessage = `Dear ${tenantName}, your repair job #${jobNumber} ("${job.title}") at ${propertyAddress} has been successfully completed by technician ${techName}. Thank you for choosing Nexus FMS!`;
+      await notificationService.createNotification({
+        recipientRole: 'TENANT',
+        recipientUserId: null,
+        type: 'JOB_COMPLETED',
+        title: `Repair Job Completed: #${jobNumber}`,
+        message: tenantMessage,
+        contactPhone: tenantPhone,
+        contactEmail: tenantEmail,
+        technicianName: techName,
+        technicianPhone: techPhone,
+        propertyAddress: propertyAddress,
+        relatedEntityType: 'work_orders',
+        relatedEntityId: parseInt(id, 10),
+        channels: (tenantPhone || tenantEmail) ? ['SMS', 'EMAIL'] : ['IN_APP'],
+        data: {
+          workOrderId: parseInt(id, 10),
+          jobNumber: jobNumber,
+          title: job.title,
+          residentName: tenantName,
+          residentPhone: tenantPhone,
+          residentEmail: tenantEmail,
+          technicianName: techName,
+          technicianPhone: techPhone,
+          propertyAddress: propertyAddress,
+          completionReport: completion_report ? completion_report.trim() : '',
+          status: 'COMPLETED'
+        }
+      });
+
+      // 2. Send In-App & SMS/Email to Staff (e.g. lightlab)
+      const staffMessage = `Great work ${techName}! You have successfully completed Job #${jobNumber}: "${job.title}" at ${propertyAddress}. Your work report and evidence have been recorded.`;
+      if (techUserId) {
+        await notificationService.createNotification({
+          recipientUserId: techUserId,
+          recipientRole: 'MAINTENANCE_STAFF',
+          type: 'JOB_COMPLETED',
+          title: `Job #${jobNumber} Completed`,
+          message: staffMessage,
+          contactPhone: techPhone,
+          contactEmail: techEmail,
+          technicianName: techName,
+          technicianPhone: techPhone,
+          propertyAddress: propertyAddress,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: parseInt(id, 10),
+          actionUrl: `/maintenance/my-tasks`,
+          channels: ['IN_APP', 'SMS', 'EMAIL'],
+          data: {
+            workOrderId: parseInt(id, 10),
+            jobNumber: jobNumber,
+            title: job.title,
+            residentName: tenantName,
+            residentPhone: tenantPhone,
+            technicianName: techName,
+            propertyAddress: propertyAddress,
+            completionReport: completion_report ? completion_report.trim() : '',
+            status: 'COMPLETED'
+          }
+        });
+      }
+
+      // 3. Send to Office Admins & Office Team
       const [admins] = await pool.query("SELECT id FROM users WHERE role IN ('OFFICE_ADMIN', 'OFFICE_TEAM')");
       for (const admin of admins) {
         await notificationService.createNotification({
           recipientUserId: admin.id,
+          recipientRole: 'OFFICE_ADMIN',
           type: 'JOB_COMPLETED',
           title: 'Technician task completed',
-          message: `Task "${job.title}" was marked completed by technician.`,
+          message: `Task #${jobNumber} "${job.title}" was marked completed by ${techName}.`,
           relatedEntityType: 'work_orders',
-          relatedEntityId: id,
-          actionUrl: `/admin/pipeline?stage=Completed Jobs`
+          relatedEntityId: parseInt(id, 10),
+          actionUrl: `/admin/pipeline?stage=Completed Jobs`,
+          channels: ['IN_APP'],
+          data: {
+            workOrderId: parseInt(id, 10),
+            jobNumber: jobNumber,
+            title: job.title,
+            technicianName: techName,
+            residentName: tenantName,
+            status: 'COMPLETED'
+          }
         });
       }
+
+      // 4. Dispatch dedicated N8N Webhook for JOB_COMPLETED
+      dispatchN8NWebhook('JOB_COMPLETED', {
+        event: 'JOB_COMPLETED',
+        type: 'JOB_COMPLETED',
+        entityId: parseInt(id, 10),
+        workOrderId: parseInt(id, 10),
+        jobNumber: jobNumber,
+        title: job.title,
+        message: `Job #${jobNumber} ("${job.title}") completed by ${techName} for resident ${tenantName}`,
+        residentName: tenantName,
+        residentPhone: tenantPhone,
+        residentEmail: tenantEmail,
+        technicianName: techName,
+        technicianPhone: techPhone,
+        technicianEmail: techEmail,
+        propertyAddress: propertyAddress,
+        completionReport: completion_report ? completion_report.trim() : '',
+        status: 'COMPLETED',
+        completedAt: new Date().toISOString(),
+        actionUrl: `${frontendBase}/jobs/${id}`
+      }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
+
     } catch(err) {
-      console.error(err);
+      console.error('[JOB_COMPLETION_NOTIFICATIONS_ERROR]', err);
     }
 
     res.status(200).json({ success: true, message: 'Job completed successfully.' });

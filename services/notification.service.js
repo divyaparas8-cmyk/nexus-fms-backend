@@ -181,19 +181,55 @@ const notificationService = {
             }
           }
 
-          // Fetch propertyAddress if missing
-          if (workOrderId && !n8nPayload.propertyAddress) {
+          // Fetch propertyAddress, jobNumber, date & time if missing
+          if (workOrderId) {
             try {
               const [woRows] = await db.query(
-                'SELECT property_address, title FROM work_orders WHERE id = ?',
+                'SELECT property_address, title, job_number, scheduled_date, scheduled_time_slot FROM work_orders WHERE id = ?',
                 [workOrderId]
               );
               if (woRows.length > 0) {
-                n8nPayload.propertyAddress = woRows[0].property_address;
+                if (!n8nPayload.propertyAddress) n8nPayload.propertyAddress = woRows[0].property_address;
+                if (!n8nPayload.jobNumber) n8nPayload.jobNumber = woRows[0].job_number;
+                if (!n8nPayload.scheduledDate && woRows[0].scheduled_date) {
+                  const raw = woRows[0].scheduled_date;
+                  n8nPayload.scheduledDate = raw instanceof Date ? raw.toISOString().substring(0, 10) : String(raw).substring(0, 10);
+                }
+                if (!n8nPayload.scheduledTimeSlot && woRows[0].scheduled_time_slot) {
+                  n8nPayload.scheduledTimeSlot = woRows[0].scheduled_time_slot;
+                }
               }
             } catch (wErr) {
-              console.warn('[NotificationService] Could not enrich property address:', wErr.message);
+              console.warn('[NotificationService] Could not enrich property address/schedule:', wErr.message);
             }
+          }
+
+          const dataObj = n8nPayload.data || {};
+          const dateVal = n8nPayload.scheduledDate || n8nPayload.date || dataObj.scheduledDate || dataObj.scheduled_date || dataObj.date || null;
+          const timeVal = n8nPayload.scheduledTime || n8nPayload.scheduledTimeSlot || n8nPayload.time || n8nPayload.timeSlot || dataObj.scheduledTime || dataObj.scheduled_time || dataObj.scheduledTimeSlot || dataObj.scheduled_time_slot || dataObj.time || null;
+
+          n8nPayload.scheduledDate = dateVal;
+          n8nPayload.scheduled_date = dateVal;
+          n8nPayload.date = dateVal;
+          n8nPayload.scheduledTime = timeVal;
+          n8nPayload.scheduled_time = timeVal;
+          n8nPayload.scheduledTimeSlot = timeVal;
+          n8nPayload.scheduled_time_slot = timeVal;
+          n8nPayload.time = timeVal;
+          n8nPayload.timeSlot = timeVal;
+
+          if (n8nPayload.data && typeof n8nPayload.data === 'object') {
+            n8nPayload.data.scheduledDate = dateVal;
+            n8nPayload.data.scheduled_date = dateVal;
+            n8nPayload.data.date = dateVal;
+            n8nPayload.data.scheduledTime = timeVal;
+            n8nPayload.data.scheduled_time = timeVal;
+            n8nPayload.data.scheduledTimeSlot = timeVal;
+            n8nPayload.data.scheduled_time_slot = timeVal;
+            n8nPayload.data.time = timeVal;
+            n8nPayload.data.timeSlot = timeVal;
+            n8nPayload.data.propertyAddress = n8nPayload.propertyAddress;
+            n8nPayload.data.actionUrl = n8nPayload.actionUrl;
           }
         } else if (type === 'QUOTE_PHOTO_REQUEST' || type === 'NEW_QUOTE_REQUEST') {
           const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
@@ -311,9 +347,63 @@ const notificationService = {
             n8nPayload.data.timeSlot = timeVal;
             n8nPayload.data.scheduledTimeSlot = timeVal;
           }
-        }
+        } else if (type === 'JOB_COMPLETED') {
+          const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+          const workOrderId = relatedEntityId || n8nPayload.entityId;
+          n8nPayload.workOrderId = workOrderId;
+          n8nPayload.entityId = workOrderId;
+          n8nPayload.reference = workOrderId ? `work_orders #${workOrderId}` : null;
+          n8nPayload.actionUrl = workOrderId ? `${frontendBase}/jobs/${workOrderId}` : `${frontendBase}/admin/pipeline?stage=Completed Jobs`;
 
-        dispatchN8NWebhook(type, n8nPayload).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));
+          if (workOrderId && (!n8nPayload.residentName || !n8nPayload.propertyAddress || !n8nPayload.technicianName)) {
+            try {
+              const [woRows] = await db.query(
+                `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.contact_phone, w.contact_email,
+                        r.full_name as live_res_name, r.phone as live_res_phone, r.email as live_res_email,
+                        u.full_name as tech_name, u.phone as tech_phone, u.email as tech_email
+                 FROM work_orders w
+                 LEFT JOIN residents r ON w.resident_id = r.id
+                 LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+                 LEFT JOIN users u ON sp.user_id = u.id
+                 WHERE w.id = ?`,
+                [workOrderId]
+              );
+              if (woRows.length > 0) {
+                const r = woRows[0];
+                n8nPayload.jobNumber = n8nPayload.jobNumber || r.job_number;
+                n8nPayload.title = n8nPayload.title || r.title;
+                n8nPayload.propertyAddress = n8nPayload.propertyAddress || r.property_address;
+                n8nPayload.residentName = n8nPayload.residentName || r.live_res_name || r.resident_name;
+                n8nPayload.residentPhone = n8nPayload.residentPhone || r.live_res_phone || r.contact_phone;
+                n8nPayload.residentEmail = n8nPayload.residentEmail || r.live_res_email || r.contact_email;
+                n8nPayload.technicianName = n8nPayload.technicianName || r.tech_name;
+                n8nPayload.technicianPhone = n8nPayload.technicianPhone || r.tech_phone;
+                n8nPayload.technicianEmail = n8nPayload.technicianEmail || r.tech_email;
+              }
+            } catch (e) {
+              console.warn('[NotificationService] Could not enrich JOB_COMPLETED info:', e.message);
+            }
+          }
+
+          n8nPayload.status = 'COMPLETED';
+          n8nPayload.pipelineStage = 'Completed Jobs';
+          n8nPayload.pipeline_stage = 'Completed Jobs';
+
+          if (n8nPayload.data && typeof n8nPayload.data === 'object') {
+            n8nPayload.data.workOrderId = workOrderId;
+            n8nPayload.data.actionUrl = n8nPayload.actionUrl;
+            n8nPayload.data.reference = n8nPayload.reference;
+            n8nPayload.data.residentName = n8nPayload.residentName;
+            n8nPayload.data.residentPhone = n8nPayload.residentPhone;
+            n8nPayload.data.residentEmail = n8nPayload.residentEmail;
+            n8nPayload.data.technicianName = n8nPayload.technicianName;
+            n8nPayload.data.technicianPhone = n8nPayload.technicianPhone;
+            n8nPayload.data.technicianEmail = n8nPayload.technicianEmail;
+            n8nPayload.data.propertyAddress = n8nPayload.propertyAddress;
+            n8nPayload.data.status = 'COMPLETED';
+            n8nPayload.data.pipelineStage = 'Completed Jobs';
+          }
+        }
       }
 
     } catch (error) {
