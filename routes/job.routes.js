@@ -9,6 +9,7 @@ const {
   deleteJob,
   cancelJob,
   getAssignmentHistory,
+  resendQuoteRequest,
 } = require('../controllers/job.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -26,6 +27,9 @@ router.get('/:id/completion-evidence', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TE
 
 // Create Endpoint (Office Admin Only)
 router.post('/', authorizeRoles('OFFICE_ADMIN'), createJob);
+
+// Resend Quote Photo Request (Office Admin & Office Team)
+router.post('/:id/resend-quote-request', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), resendQuoteRequest);
 
 // Move Stage (Office Admin & Maintenance Staff Only)
 router.put('/:id/stage', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), moveJobStage);
@@ -48,3 +52,4 @@ router.post(
 router.delete('/:id', authorizeRoles('OFFICE_ADMIN'), deleteJob);
 
 module.exports = router;
+

@@ -122,6 +122,25 @@ const notificationService = {
         }
       }
 
+      // Automatic fallback: if contactPhone or contactEmail is missing, resolve directly from work_orders & residents
+      if ((!contactPhone || !contactEmail) && relatedEntityType === 'work_orders' && relatedEntityId) {
+        try {
+          const [woRows] = await db.query(
+            `SELECT w.contact_phone, w.contact_email, r.phone as res_phone, r.email as res_email 
+             FROM work_orders w 
+             LEFT JOIN residents r ON w.resident_id = r.id 
+             WHERE w.id = ?`,
+            [relatedEntityId]
+          );
+          if (woRows.length > 0) {
+            if (!contactPhone) contactPhone = woRows[0].contact_phone || woRows[0].res_phone || null;
+            if (!contactEmail) contactEmail = woRows[0].contact_email || woRows[0].res_email || null;
+          }
+        } catch (e) {
+          console.warn('[NotificationService] Fallback contact info lookup failed:', e.message);
+        }
+      }
+
       if (channels.includes('EMAIL') && contactEmail) {
         await this._processChannelDelivery(db, notificationId, 'EMAIL', contactEmail, async () => {
            return await sendEmail({ to: contactEmail, subject: title, body: finalMessage });
@@ -133,6 +152,7 @@ const notificationService = {
            return await sendSms({ to: contactPhone, message: finalMessage });
          });
       }
+
 
       // Dispatch event to N8N webhook asynchronously without blocking main flow
       if (!skipWebhook) {
@@ -238,6 +258,29 @@ const notificationService = {
           n8nPayload.entityId = workOrderId;
           n8nPayload.reference = workOrderId;
 
+          // Fetch work order details if missing
+          if (workOrderId && (!n8nPayload.contactPhone || !n8nPayload.propertyAddress || !n8nPayload.residentName)) {
+            try {
+              const [woRows] = await db.query(
+                `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.contact_phone, w.contact_email,
+                        r.full_name as live_res_name, r.phone as live_res_phone, r.email as live_res_email
+                 FROM work_orders w
+                 LEFT JOIN residents r ON w.resident_id = r.id
+                 WHERE w.id = ?`,
+                [workOrderId]
+              );
+              if (woRows.length > 0) {
+                const r = woRows[0];
+                n8nPayload.jobNumber = n8nPayload.jobNumber || r.job_number;
+                n8nPayload.title = n8nPayload.title || r.title;
+                n8nPayload.propertyAddress = n8nPayload.propertyAddress || r.property_address;
+                n8nPayload.residentName = n8nPayload.residentName || r.live_res_name || r.resident_name;
+                n8nPayload.contactPhone = n8nPayload.contactPhone || r.contact_phone || r.live_res_phone;
+                n8nPayload.contactEmail = n8nPayload.contactEmail || r.contact_email || r.live_res_email;
+              }
+            } catch (e) {}
+          }
+
           // Resolve secure_token from quote_requests
           let token = n8nPayload.data?.secure_token || n8nPayload.data?.token || n8nPayload.secureToken || null;
           if (!token && workOrderId) {
@@ -260,6 +303,9 @@ const notificationService = {
               n8nPayload.data.uploadUrl = uploadUrl;
               n8nPayload.data.photoUploadLink = uploadUrl;
               n8nPayload.data.uploadLink = uploadUrl;
+              n8nPayload.data.residentName = n8nPayload.residentName;
+              n8nPayload.data.contactPhone = n8nPayload.contactPhone;
+              n8nPayload.data.propertyAddress = n8nPayload.propertyAddress;
             }
           }
         } else if (type === 'BOOKING_REQUEST') {
@@ -267,6 +313,29 @@ const notificationService = {
           const workOrderId = relatedEntityId || n8nPayload.entityId;
           n8nPayload.workOrderId = workOrderId;
           n8nPayload.entityId = workOrderId;
+
+          // Fetch work order details if missing
+          if (workOrderId && (!n8nPayload.contactPhone || !n8nPayload.propertyAddress || !n8nPayload.residentName)) {
+            try {
+              const [woRows] = await db.query(
+                `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.contact_phone, w.contact_email,
+                        r.full_name as live_res_name, r.phone as live_res_phone, r.email as live_res_email
+                 FROM work_orders w
+                 LEFT JOIN residents r ON w.resident_id = r.id
+                 WHERE w.id = ?`,
+                [workOrderId]
+              );
+              if (woRows.length > 0) {
+                const r = woRows[0];
+                n8nPayload.jobNumber = n8nPayload.jobNumber || r.job_number;
+                n8nPayload.title = n8nPayload.title || r.title;
+                n8nPayload.propertyAddress = n8nPayload.propertyAddress || r.property_address;
+                n8nPayload.residentName = n8nPayload.residentName || r.live_res_name || r.resident_name;
+                n8nPayload.contactPhone = n8nPayload.contactPhone || r.contact_phone || r.live_res_phone;
+                n8nPayload.contactEmail = n8nPayload.contactEmail || r.contact_email || r.live_res_email;
+              }
+            } catch (e) {}
+          }
 
           // Resolve secure_token from booking_requests if missing
           let token = n8nPayload.data?.bookingToken || n8nPayload.data?.secure_token || n8nPayload.secureToken || null;
@@ -289,8 +358,12 @@ const notificationService = {
               n8nPayload.data.actionUrl = bookingUrl;
               n8nPayload.data.bookingUrl = bookingUrl;
               n8nPayload.data.bookingLink = bookingUrl;
+              n8nPayload.data.residentName = n8nPayload.residentName;
+              n8nPayload.data.contactPhone = n8nPayload.contactPhone;
+              n8nPayload.data.propertyAddress = n8nPayload.propertyAddress;
             }
           }
+
         } else if (type === 'BOOKING_CONFIRMED') {
           const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
           const workOrderId = relatedEntityId || n8nPayload.entityId;

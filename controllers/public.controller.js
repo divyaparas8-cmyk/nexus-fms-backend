@@ -4,6 +4,8 @@ const notificationService = require('../services/notification.service');
 const { autoAssignTechnician, isAutoAssignmentEnabled } = require('../services/autoAssignment.service');
 const { dispatchN8NWebhook } = require('../services/webhook.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
+const QuoteRequestService = require('../services/quoteRequest.service');
+const BookingRequestService = require('../services/bookingRequest.service');
 
 
 // @desc    Get public request information by secure token (NO LOGIN REQUIRED)
@@ -803,6 +805,9 @@ const generatePublicRequestLink = async (req, res, next) => {
          ON DUPLICATE KEY UPDATE secure_token = ?, status = ?, expires_at = ?`,
         [id, secureToken, 'PENDING', expiresAt, secureToken, 'PENDING', expiresAt]
       );
+      await QuoteRequestService.triggerAutoPhotoRequest(id).catch(e => {
+        console.warn('[generatePublicRequestLink] Could not trigger auto photo request:', e.message);
+      });
     } else {
       await pool.query(
         `INSERT INTO booking_requests (work_order_id, secure_token, status, expires_at) 
@@ -810,6 +815,9 @@ const generatePublicRequestLink = async (req, res, next) => {
          ON DUPLICATE KEY UPDATE secure_token = ?, status = ?, expires_at = ?`,
         [id, secureToken, 'WAITING_FOR_BOOKING', expiresAt, secureToken, 'WAITING_FOR_BOOKING', expiresAt]
       );
+      await BookingRequestService.triggerAutoBookingRequest(id).catch(e => {
+        console.warn('[generatePublicRequestLink] Could not trigger auto booking request:', e.message);
+      });
     }
 
     if (linkType === 'BOOKING') {

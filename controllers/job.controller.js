@@ -492,7 +492,9 @@ const createJob = async (req, res, next) => {
 
     // Notification Triggers
     if (stage === 'Quotes') {
-      QuoteRequestService.triggerAutoPhotoRequest(result.insertId);
+      await QuoteRequestService.triggerAutoPhotoRequest(result.insertId).catch(err => {
+        console.error('[createJob] Error triggering auto photo request:', err.message);
+      });
       
       const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of admins) {
@@ -675,11 +677,15 @@ const moveJobStage = async (req, res, next) => {
     }
 
     if (normalizedStage === 'Quotes' && existing[0].pipeline_stage !== 'Quotes') {
-      QuoteRequestService.triggerAutoPhotoRequest(id);
+      await QuoteRequestService.triggerAutoPhotoRequest(id).catch(err => {
+        console.error('[moveJobStage] Error triggering auto photo request:', err.message);
+      });
     }
 
     if (normalizedStage === 'Jobs' && existing[0].pipeline_stage !== 'Jobs') {
-      BookingRequestService.triggerAutoBookingRequest(id);
+      await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+        console.error('[moveJobStage] Error triggering auto booking request:', err.message);
+      });
     }
 
     const [updatedRows] = await pool.query(
@@ -1180,11 +1186,15 @@ const updateJobStatus = async (req, res, next) => {
     }
 
     if (newStage === 'Quotes' && existingJob.pipeline_stage !== 'Quotes') {
-      QuoteRequestService.triggerAutoPhotoRequest(id);
+      await QuoteRequestService.triggerAutoPhotoRequest(id).catch(err => {
+        console.error('[updateJob] Error triggering auto photo request:', err.message);
+      });
     }
 
     if (newStage === 'Jobs' && existingJob.pipeline_stage !== 'Jobs') {
-      BookingRequestService.triggerAutoBookingRequest(id);
+      await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+        console.error('[updateJob] Error triggering auto booking request:', err.message);
+      });
     }
 
     if (newStage === 'Completed Quotes' && existingJob.pipeline_stage !== 'Completed Quotes') {
@@ -1558,6 +1568,23 @@ const getAssignmentHistory = async (req, res, next) => {
   }
 };
 
+// @desc    Resend Quote Photo Request (SMS & Email) to Tenant
+// @route   POST /api/v1/jobs/:id/resend-quote-request
+// @access  Private (Admin & Office Team)
+const resendQuoteRequest = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await QuoteRequestService.triggerAutoPhotoRequest(id);
+    return res.status(200).json({
+      success: true,
+      message: 'Quote photo request notification and SMS sent successfully.',
+      data: result,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   getJobs,
   getJobById,
@@ -1567,4 +1594,6 @@ module.exports = {
   deleteJob,
   cancelJob,
   getAssignmentHistory,
+  resendQuoteRequest,
 };
+

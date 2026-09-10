@@ -251,6 +251,39 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
     let token = formattedPayload.secureToken || formattedPayload.data?.secure_token || null;
 
+    if (workOrderId) {
+      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
+      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
+      formattedPayload.reference = formattedPayload.reference || workOrderId;
+
+      if (!formattedPayload.contactPhone || !formattedPayload.propertyAddress || !formattedPayload.residentName) {
+        try {
+          const { pool } = require('../config/db');
+          const [woRows] = await pool.query(
+            `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.contact_phone, w.contact_email,
+                    r.full_name as live_res_name, r.phone as live_res_phone, r.email as live_res_email
+             FROM work_orders w
+             LEFT JOIN residents r ON w.resident_id = r.id
+             WHERE w.id = ?`,
+            [workOrderId]
+          );
+          if (woRows.length > 0) {
+            const r = woRows[0];
+            formattedPayload.jobNumber = formattedPayload.jobNumber || r.job_number;
+            formattedPayload.title = formattedPayload.title || r.title;
+            formattedPayload.propertyAddress = formattedPayload.propertyAddress || r.property_address;
+            formattedPayload.residentName = formattedPayload.residentName || r.live_res_name || r.resident_name;
+            formattedPayload.residentPhone = formattedPayload.residentPhone || r.live_res_phone || r.contact_phone;
+            formattedPayload.contactPhone = formattedPayload.contactPhone || r.contact_phone || r.live_res_phone;
+            formattedPayload.residentEmail = formattedPayload.residentEmail || r.live_res_email || r.contact_email;
+            formattedPayload.contactEmail = formattedPayload.contactEmail || r.contact_email || r.live_res_email;
+          }
+        } catch (e) {
+          console.warn('[N8N_WEBHOOK] Could not enrich QUOTE_PHOTO_REQUEST info:', e.message);
+        }
+      }
+    }
+
     if (!token && workOrderId) {
       try {
         const { pool } = require('../config/db');
@@ -279,10 +312,21 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       }
     }
 
-    if (workOrderId) {
-      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
-      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
-      formattedPayload.reference = formattedPayload.reference || workOrderId;
+    formattedPayload.to = formattedPayload.to || formattedPayload.contactPhone || formattedPayload.residentPhone;
+    formattedPayload.phone = formattedPayload.phone || formattedPayload.contactPhone || formattedPayload.residentPhone;
+    formattedPayload.name = formattedPayload.name || formattedPayload.residentName;
+    formattedPayload.address = formattedPayload.address || formattedPayload.propertyAddress;
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.to = formattedPayload.to;
+      formattedPayload.data.contactPhone = formattedPayload.contactPhone;
+      formattedPayload.data.residentPhone = formattedPayload.residentPhone;
+      formattedPayload.data.contactEmail = formattedPayload.contactEmail;
+      formattedPayload.data.residentEmail = formattedPayload.residentEmail;
+      formattedPayload.data.residentName = formattedPayload.residentName;
+      formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
+      formattedPayload.data.title = formattedPayload.title;
+      formattedPayload.data.jobNumber = formattedPayload.jobNumber;
     }
   }
 
@@ -350,6 +394,39 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
     let token = formattedPayload.bookingToken || formattedPayload.secureToken || formattedPayload.data?.bookingToken || formattedPayload.data?.secure_token || null;
 
+    if (workOrderId) {
+      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
+      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
+      formattedPayload.reference = formattedPayload.reference || workOrderId;
+
+      if (!formattedPayload.contactPhone || !formattedPayload.propertyAddress || !formattedPayload.residentName) {
+        try {
+          const { pool } = require('../config/db');
+          const [woRows] = await pool.query(
+            `SELECT w.job_number, w.title, w.property_address, w.resident_name, w.contact_phone, w.contact_email,
+                    r.full_name as live_res_name, r.phone as live_res_phone, r.email as live_res_email
+             FROM work_orders w
+             LEFT JOIN residents r ON w.resident_id = r.id
+             WHERE w.id = ?`,
+            [workOrderId]
+          );
+          if (woRows.length > 0) {
+            const r = woRows[0];
+            formattedPayload.jobNumber = formattedPayload.jobNumber || r.job_number;
+            formattedPayload.title = formattedPayload.title || r.title;
+            formattedPayload.propertyAddress = formattedPayload.propertyAddress || r.property_address;
+            formattedPayload.residentName = formattedPayload.residentName || r.live_res_name || r.resident_name;
+            formattedPayload.residentPhone = formattedPayload.residentPhone || r.live_res_phone || r.contact_phone;
+            formattedPayload.contactPhone = formattedPayload.contactPhone || r.contact_phone || r.live_res_phone;
+            formattedPayload.residentEmail = formattedPayload.residentEmail || r.live_res_email || r.contact_email;
+            formattedPayload.contactEmail = formattedPayload.contactEmail || r.contact_email || r.live_res_email;
+          }
+        } catch (e) {
+          console.warn('[N8N_WEBHOOK] Could not enrich BOOKING_REQUEST info:', e.message);
+        }
+      }
+    }
+
     if (!token && workOrderId) {
       try {
         const { pool } = require('../config/db');
@@ -383,6 +460,18 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     formattedPayload.residentName = resName;
     formattedPayload.property = propAddr;
     formattedPayload.propertyAddress = propAddr;
+    formattedPayload.to = formattedPayload.to || formattedPayload.contactPhone || formattedPayload.residentPhone;
+    formattedPayload.phone = formattedPayload.phone || formattedPayload.contactPhone || formattedPayload.residentPhone;
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.to = formattedPayload.to;
+      formattedPayload.data.contactPhone = formattedPayload.contactPhone;
+      formattedPayload.data.residentPhone = formattedPayload.residentPhone;
+      formattedPayload.data.contactEmail = formattedPayload.contactEmail;
+      formattedPayload.data.residentEmail = formattedPayload.residentEmail;
+      formattedPayload.data.residentName = formattedPayload.residentName;
+      formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
+    }
   }
 
   const eventData = {
