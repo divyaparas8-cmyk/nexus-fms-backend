@@ -162,6 +162,11 @@ const notificationService = {
       }
 
 
+      // Never send external webhooks for internal admin pipeline movements
+      if (type === 'PIPELINE_UPDATE' || type === 'PIPELINE_STAGE_UPDATED') {
+        skipWebhook = true;
+      }
+
       // Dispatch event to N8N webhook asynchronously without blocking main flow
       if (!skipWebhook) {
         let n8nPayload = {
@@ -289,6 +294,12 @@ const notificationService = {
             } catch (e) {}
           }
 
+          // CRITICAL: Ensure tenant name is populated across all fields for N8N template
+          const resolvedResidentName = n8nPayload.residentName || n8nPayload.data?.name || n8nPayload.data?.residentName || n8nPayload.data?.resident_name || 'Resident';
+          n8nPayload.name = resolvedResidentName;
+          n8nPayload.residentName = resolvedResidentName;
+          n8nPayload.recipientName = resolvedResidentName;
+
           // Resolve secure_token from quote_requests
           let token = n8nPayload.data?.secure_token || n8nPayload.data?.token || n8nPayload.secureToken || null;
           if (!token && workOrderId) {
@@ -311,7 +322,10 @@ const notificationService = {
               n8nPayload.data.uploadUrl = uploadUrl;
               n8nPayload.data.photoUploadLink = uploadUrl;
               n8nPayload.data.uploadLink = uploadUrl;
-              n8nPayload.data.residentName = n8nPayload.residentName;
+              n8nPayload.data.residentName = resolvedResidentName;
+              n8nPayload.data.name = resolvedResidentName;
+              n8nPayload.data.recipientName = resolvedResidentName;
+              n8nPayload.data.resident_name = resolvedResidentName;
               n8nPayload.data.contactPhone = n8nPayload.contactPhone;
               n8nPayload.data.propertyAddress = n8nPayload.propertyAddress;
             }

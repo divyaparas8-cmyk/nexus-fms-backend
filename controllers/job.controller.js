@@ -707,18 +707,21 @@ const moveJobStage = async (req, res, next) => {
       [id]
     );
 
-    // Create Notification for Pipeline Update
+    // Create Notification for Pipeline Update (Internal in-app notification only; never send external SMS/Email to tenant)
     try {
       const [adminRows] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of adminRows) {
         await notificationService.createNotification({
           recipientUserId: admin.id,
+          recipientRole: 'OFFICE_ADMIN',
           type: 'PIPELINE_UPDATE',
           title: 'Pipeline Stage Updated',
           message: `Work Order #${id} moved to "${newStage}".`,
           relatedEntityType: 'work_orders',
           relatedEntityId: parseInt(id, 10),
-          actionUrl: '/admin/pipeline'
+          actionUrl: '/admin/pipeline',
+          channels: ['IN_APP'],
+          skipWebhook: true
         });
       }
     } catch (notifErr) {
@@ -735,8 +738,10 @@ const moveJobStage = async (req, res, next) => {
         const pAddress = row?.live_property_address || row?.property_address || '';
         const jNum = row?.job_number || id;
         const techStaffName = row?.staff_name || 'Technician';
+        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+        const completionReportUrl = `${frontendBase}/jobs/${id}/report`;
 
-        // Notify Tenant (Mukul)
+        // Notify Tenant (Mukul) - in-app record only, dedicated single N8N webhook handles SMS/Email
         notificationService.createNotification({
           recipientRole: 'TENANT',
           recipientUserId: null,
@@ -746,15 +751,19 @@ const moveJobStage = async (req, res, next) => {
           contactPhone: tPhone,
           contactEmail: tEmail,
           technicianName: techStaffName,
+          name: tName,
           propertyAddress: pAddress,
           relatedEntityType: 'work_orders',
           relatedEntityId: parseInt(id, 10),
-          channels: (tPhone || tEmail) ? ['SMS', 'EMAIL'] : ['IN_APP'],
+          channels: ['IN_APP'],
+          skipWebhook: true,
           data: {
             workOrderId: parseInt(id, 10),
             jobNumber: jNum,
             title: row?.title,
             residentName: tName,
+            name: tName,
+            recipientName: tName,
             residentPhone: tPhone,
             residentEmail: tEmail,
             technicianName: techStaffName,
@@ -763,7 +772,7 @@ const moveJobStage = async (req, res, next) => {
           }
         }).catch(err => console.warn('[JOB_COMPLETED_NOTIF_WARN] Tenant notification failed:', err.message));
 
-        // Dispatch N8N Webhook
+        // Dispatch single authoritative N8N Webhook with PDF report link
         dispatchN8NWebhook('JOB_COMPLETED', {
           event: 'JOB_COMPLETED',
           type: 'JOB_COMPLETED',
@@ -773,12 +782,22 @@ const moveJobStage = async (req, res, next) => {
           title: row?.title,
           message: `Job #${jNum} ("${row?.title}") completed by ${techStaffName} for resident ${tName}`,
           residentName: tName,
+          name: tName,
+          recipientName: tName,
           residentPhone: tPhone,
           residentEmail: tEmail,
+          contactPhone: tPhone,
+          contactEmail: tEmail,
+          to: tPhone,
+          phone: tPhone,
+          email: tEmail,
           technicianName: techStaffName,
           propertyAddress: pAddress,
           status: 'COMPLETED',
-          completedAt: new Date().toISOString()
+          completedAt: new Date().toISOString(),
+          actionUrl: completionReportUrl,
+          reportUrl: completionReportUrl,
+          pdfReportUrl: completionReportUrl
         }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
       } catch (e) {
         console.warn('[moveJobStage] Error dispatching completed job events:', e.message);

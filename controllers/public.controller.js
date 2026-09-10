@@ -598,17 +598,20 @@ const submitPublicBooking = async (req, res, next) => {
     const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
     const directJobActionUrl = `${frontendBase}/jobs/${workOrderId}`;
 
-    // 1. Notify Admins
+    // 1. Notify Admins (Internal in-app notification only; skip external N8N webhook so tenant doesn't get duplicate empty SMS)
     const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
     for (const admin of admins) {
       await notificationService.createNotification({
         recipientUserId: admin.id,
-        type: 'BOOKING_CONFIRMED',
+        recipientRole: 'OFFICE_ADMIN',
+        type: 'BOOKING_CONFIRMED_ADMIN',
         title: 'New booking confirmed',
         message: `${jobTitle} booked on ${dateVal} at ${slotVal} for ${resName} (Assigned: ${techName})`,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
-        actionUrl: `/admin/calendar`
+        actionUrl: `/admin/calendar`,
+        channels: ['IN_APP'],
+        skipWebhook: true
       }).catch(e => console.warn('[Admin Booking Notification Error]', e.message));
     }
 

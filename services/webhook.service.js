@@ -340,7 +340,9 @@ const dispatchN8NWebhook = async (eventType, payload) => {
 
     formattedPayload.to = formattedPayload.to || formattedPayload.contactPhone || formattedPayload.residentPhone;
     formattedPayload.phone = formattedPayload.phone || formattedPayload.contactPhone || formattedPayload.residentPhone;
-    formattedPayload.name = formattedPayload.name || formattedPayload.residentName;
+    formattedPayload.name = formattedPayload.name || formattedPayload.residentName || formattedPayload.data?.name || formattedPayload.data?.residentName || formattedPayload.data?.resident_name || 'Resident';
+    formattedPayload.residentName = formattedPayload.name;
+    formattedPayload.recipientName = formattedPayload.name;
     formattedPayload.address = formattedPayload.address || formattedPayload.propertyAddress;
     formattedPayload.email = formattedPayload.email || formattedPayload.contactEmail || formattedPayload.residentEmail;
     formattedPayload.contactEmail = formattedPayload.contactEmail || formattedPayload.email;
@@ -357,7 +359,9 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       formattedPayload.data.contactEmail = formattedPayload.contactEmail;
       formattedPayload.data.residentEmail = formattedPayload.residentEmail;
       formattedPayload.data.residentName = formattedPayload.residentName;
+      formattedPayload.data.resident_name = formattedPayload.residentName;
       formattedPayload.data.name = formattedPayload.name;
+      formattedPayload.data.recipientName = formattedPayload.name;
       formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
       formattedPayload.data.address = formattedPayload.address;
       formattedPayload.data.title = formattedPayload.title;
