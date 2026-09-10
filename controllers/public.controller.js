@@ -553,6 +553,11 @@ const submitPublicBooking = async (req, res, next) => {
       "SELECT title, resident_name, contact_phone, contact_email, property_address, assigned_staff_id, manager_name, manager_email, job_number, description, priority FROM work_orders WHERE id = ?",
       [workOrderId]
     );
+
+    // Commit DB changes before triggering external HTTP webhooks/notifications
+    await connection.commit();
+    connection.release();
+
     const jobTitle = woRows[0]?.title || 'Repair Job';
     const resName = woRows[0]?.resident_name || 'Resident';
     const resAddress = woRows[0]?.property_address || 'Property';
@@ -568,7 +573,7 @@ const submitPublicBooking = async (req, res, next) => {
     let techUserId = null;
 
     if (targetStaffId) {
-      const [techRows] = await connection.query(
+      const [techRows] = await pool.query(
         `SELECT sp.id, sp.user_id, u.full_name, u.email, u.phone 
          FROM staff_profiles sp 
          JOIN users u ON sp.user_id = u.id 
@@ -584,7 +589,7 @@ const submitPublicBooking = async (req, res, next) => {
     }
 
     // Fetch tenant uploaded photos for technician evidence
-    const [customerMediaRows] = await connection.query(
+    const [customerMediaRows] = await pool.query(
       'SELECT file_path FROM customer_media_uploads WHERE work_order_id = ?',
       [workOrderId]
     );
@@ -594,7 +599,7 @@ const submitPublicBooking = async (req, res, next) => {
     const directJobActionUrl = `${frontendBase}/jobs/${workOrderId}`;
 
     // 1. Notify Admins
-    const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
+    const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
     for (const admin of admins) {
       await notificationService.createNotification({
         recipientUserId: admin.id,
@@ -604,7 +609,7 @@ const submitPublicBooking = async (req, res, next) => {
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         actionUrl: `/admin/calendar`
-      }, connection);
+      }).catch(e => console.warn('[Admin Booking Notification Error]', e.message));
     }
 
     // 2. Notify assigned technician via SMS, Email, and In-App
@@ -625,7 +630,9 @@ const submitPublicBooking = async (req, res, next) => {
           residentName: resName,
           residentPhone: woRows[0]?.contact_phone,
           photoCount: photoUrls.length,
-          photoUrls
+          photoUrls,
+          contactPhone: techPhone,
+          contactEmail: techEmail
         },
         actionUrl: directJobActionUrl,
         relatedEntityType: 'work_orders',
@@ -635,8 +642,7 @@ const submitPublicBooking = async (req, res, next) => {
         contactPhone: techPhone,
         technicianName: techName,
         technicianPhone: techPhone,
-        propertyAddress: resAddress,
-        connection
+        propertyAddress: resAddress
       }).catch(err => console.error('[Tech Booking Notification Dispatch Error]', err));
     }
 
@@ -683,8 +689,7 @@ const submitPublicBooking = async (req, res, next) => {
         channels: ['EMAIL', 'SMS'],
         contactEmail: resEmail,
         contactPhone: resPhone,
-        propertyAddress: resAddress,
-        connection
+        propertyAddress: resAddress
       }).catch(err => console.error('[Tenant Booking Confirmation Notification Error]', err));
     }
 
@@ -709,15 +714,11 @@ const submitPublicBooking = async (req, res, next) => {
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         channels: ['EMAIL'],
-        contactEmail: mgrEmail,
-        connection
+        contactEmail: mgrEmail
       }).catch(err => console.error('[Manager Booking Confirmation Email Error]', err));
     }
 
-    await connection.commit();
-    connection.release();
-
-    // 5. Dispatch TASK_ASSIGNED webhook to N8N
+    // 5. Dispatch TASK_ASSIGNED webhook to N8N with full technician contact info
     const taskAssignedPayload = {
       event: 'TASK_ASSIGNED',
       type: 'TASK_ASSIGNED',
@@ -746,6 +747,11 @@ const submitPublicBooking = async (req, res, next) => {
       technicianName: techName,
       technicianEmail: techEmail,
       technicianPhone: techPhone,
+      contactPhone: techPhone,
+      contactEmail: techEmail,
+      to: techPhone,
+      email: techEmail,
+      phone: techPhone,
       technician: {
         id: targetStaffId,
         name: techName,
@@ -771,11 +777,12 @@ const submitPublicBooking = async (req, res, next) => {
       },
     });
   } catch (err) {
-    await connection.rollback();
+    await connection.rollback().catch(() => {});
     connection.release();
     next(err);
   }
 };
+
 
 // @desc    Generate Cryptographic Public Secure Link (Office Admin Only)
 // @route   POST /api/v1/jobs/:id/generate-link

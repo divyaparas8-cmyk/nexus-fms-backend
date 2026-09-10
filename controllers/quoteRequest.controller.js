@@ -144,6 +144,11 @@ const generateQuoteRequest = async (req, res, next) => {
     await connection.commit();
     connection.release();
 
+    const { triggerAutoPhotoRequest } = require('../services/quoteRequest.service');
+    triggerAutoPhotoRequest(workOrderId).catch(err => {
+      console.warn('[generateQuoteRequest] triggerAutoPhotoRequest warn:', err.message);
+    });
+
     const frontendOrigin = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
     const publicUrl = `${frontendOrigin}/quote-request/${secureToken}`;
     const tenantName = resident.full_name;

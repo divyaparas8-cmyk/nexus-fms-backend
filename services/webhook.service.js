@@ -82,6 +82,13 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     formattedPayload.time = schedTime;
     formattedPayload.timeSlot = schedTime;
 
+    // Ensure technician phone and email are set as the recipient for TASK_ASSIGNED
+    formattedPayload.contactPhone = formattedPayload.contactPhone || formattedPayload.technicianPhone || formattedPayload.technician?.phone || null;
+    formattedPayload.contactEmail = formattedPayload.contactEmail || formattedPayload.technicianEmail || formattedPayload.technician?.email || null;
+    formattedPayload.to = formattedPayload.to || formattedPayload.contactPhone;
+    formattedPayload.email = formattedPayload.email || formattedPayload.contactEmail;
+    formattedPayload.phone = formattedPayload.phone || formattedPayload.contactPhone;
+
     if (formattedPayload.data && typeof formattedPayload.data === 'object') {
       formattedPayload.data.scheduledDate = schedDate;
       formattedPayload.data.scheduled_date = schedDate;
@@ -94,7 +101,15 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       formattedPayload.data.timeSlot = schedTime;
       formattedPayload.data.actionUrl = formattedPayload.actionUrl;
       formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
+      formattedPayload.data.contactPhone = formattedPayload.contactPhone;
+      formattedPayload.data.contactEmail = formattedPayload.contactEmail;
+      formattedPayload.data.technicianPhone = formattedPayload.technicianPhone;
+      formattedPayload.data.technicianEmail = formattedPayload.technicianEmail;
+      formattedPayload.data.to = formattedPayload.to;
+      formattedPayload.data.email = formattedPayload.email;
+      formattedPayload.data.phone = formattedPayload.phone;
     }
+
 
     // 7. Ensure message
     if (!formattedPayload.message) {
@@ -316,15 +331,24 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     formattedPayload.phone = formattedPayload.phone || formattedPayload.contactPhone || formattedPayload.residentPhone;
     formattedPayload.name = formattedPayload.name || formattedPayload.residentName;
     formattedPayload.address = formattedPayload.address || formattedPayload.propertyAddress;
+    formattedPayload.email = formattedPayload.email || formattedPayload.contactEmail || formattedPayload.residentEmail;
+    formattedPayload.contactEmail = formattedPayload.contactEmail || formattedPayload.email;
+    formattedPayload.residentEmail = formattedPayload.residentEmail || formattedPayload.email;
+    formattedPayload.contactPhone = formattedPayload.contactPhone || formattedPayload.phone;
+    formattedPayload.residentPhone = formattedPayload.residentPhone || formattedPayload.phone;
 
     if (formattedPayload.data && typeof formattedPayload.data === 'object') {
       formattedPayload.data.to = formattedPayload.to;
+      formattedPayload.data.phone = formattedPayload.phone;
       formattedPayload.data.contactPhone = formattedPayload.contactPhone;
       formattedPayload.data.residentPhone = formattedPayload.residentPhone;
+      formattedPayload.data.email = formattedPayload.email;
       formattedPayload.data.contactEmail = formattedPayload.contactEmail;
       formattedPayload.data.residentEmail = formattedPayload.residentEmail;
       formattedPayload.data.residentName = formattedPayload.residentName;
+      formattedPayload.data.name = formattedPayload.name;
       formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
+      formattedPayload.data.address = formattedPayload.address;
       formattedPayload.data.title = formattedPayload.title;
       formattedPayload.data.jobNumber = formattedPayload.jobNumber;
     }

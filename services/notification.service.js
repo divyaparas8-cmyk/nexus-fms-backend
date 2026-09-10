@@ -142,15 +142,23 @@ const notificationService = {
       }
 
       if (channels.includes('EMAIL') && contactEmail) {
-        await this._processChannelDelivery(db, notificationId, 'EMAIL', contactEmail, async () => {
-           return await sendEmail({ to: contactEmail, subject: title, body: finalMessage });
-        });
+        try {
+          await this._processChannelDelivery(db, notificationId, 'EMAIL', contactEmail, async () => {
+             return await sendEmail({ to: contactEmail, subject: title, body: finalMessage });
+          });
+        } catch (e) {
+          console.warn('[NotificationService] EMAIL delivery failed:', e.message);
+        }
       }
 
       if (channels.includes('SMS') && contactPhone) {
-         await this._processChannelDelivery(db, notificationId, 'SMS', contactPhone, async () => {
-           return await sendSms({ to: contactPhone, message: finalMessage });
-         });
+        try {
+          await this._processChannelDelivery(db, notificationId, 'SMS', contactPhone, async () => {
+            return await sendSms({ to: contactPhone, message: finalMessage });
+          });
+        } catch (e) {
+          console.warn('[NotificationService] SMS delivery failed:', e.message);
+        }
       }
 
 
@@ -477,50 +485,67 @@ const notificationService = {
             n8nPayload.data.pipelineStage = 'Completed Jobs';
           }
         }
+
+        // Send enriched payload to N8N webhook
+        await dispatchN8NWebhook(type, n8nPayload).catch(err => {
+          console.warn(`[NotificationService] N8N dispatch failed for ${type}:`, err.message);
+        });
       }
 
     } catch (error) {
       console.error('[NotificationService] Dispatch failed:', error);
       if (connection) throw error; 
     }
+
   },
 
   async _processChannelDelivery(db, notificationId, channel, recipient, deliveryFn) {
-     const [trackRes] = await db.query(
-       `INSERT INTO notification_delivery (notification_id, channel, recipient, status, attempts) VALUES (?, ?, ?, 'PENDING', 0)`,
-       [notificationId || null, channel, recipient]
-     );
-     const deliveryId = trackRes.insertId;
+    let deliveryId = null;
+    try {
+      const [trackRes] = await db.query(
+        `INSERT INTO notification_delivery (notification_id, channel, recipient, status, attempts) VALUES (?, ?, ?, 'PENDING', 0)`,
+        [notificationId || null, channel, recipient]
+      );
+      deliveryId = trackRes.insertId;
+    } catch (dbErr) {
+      console.warn('[NotificationService] Delivery record insert warning:', dbErr.message);
+    }
 
-     let attempt = 1;
-     const maxAttempts = 3;
-     let success = false;
-     let providerRes = null;
-     let lastError = null;
+    let attempt = 1;
+    const maxAttempts = 3;
+    let success = false;
+    let providerRes = null;
+    let lastError = null;
 
-     while (attempt <= maxAttempts && !success) {
-       try {
-         await db.query('UPDATE notification_delivery SET attempts = ?, last_attempt_at = NOW() WHERE id = ?', [attempt, deliveryId]);
-         providerRes = await deliveryFn();
-         success = true;
-         await db.query(
-           `UPDATE notification_delivery SET status = 'SENT', sent_at = NOW(), provider = ?, provider_message_id = ? WHERE id = ?`,
-           [providerRes.provider, providerRes.messageId, deliveryId]
-         );
-       } catch (error) {
-         lastError = error;
-         attempt++;
-         if (attempt <= maxAttempts) await new Promise(r => setTimeout(r, 1000 * attempt));
-       }
-     }
+    while (attempt <= maxAttempts && !success) {
+      try {
+        if (deliveryId) {
+          await db.query('UPDATE notification_delivery SET attempts = ?, last_attempt_at = NOW() WHERE id = ?', [attempt, deliveryId]).catch(() => {});
+        }
+        providerRes = await deliveryFn();
+        success = true;
+        if (deliveryId) {
+          await db.query(
+            `UPDATE notification_delivery SET status = 'SENT', sent_at = NOW(), provider = ?, provider_message_id = ? WHERE id = ?`,
+            [providerRes?.provider || 'EXTERNAL', providerRes?.messageId || null, deliveryId]
+          ).catch(() => {});
+        }
+      } catch (error) {
+        lastError = error;
+        attempt++;
+        if (attempt <= maxAttempts) await new Promise(r => setTimeout(r, 1000 * attempt));
+      }
+    }
 
-     if (!success) {
-       await db.query(
-         `UPDATE notification_delivery SET status = 'FAILED', failed_at = NOW(), error_message = ? WHERE id = ?`,
-         [lastError.message.substring(0, 500), deliveryId]
-       );
-       console.error(`[NotificationService] Channel ${channel} failed after ${maxAttempts} attempts for delivery ID ${deliveryId}`);
-     }
+    if (!success) {
+      if (deliveryId) {
+        await db.query(
+          `UPDATE notification_delivery SET status = 'FAILED', failed_at = NOW(), error_message = ? WHERE id = ?`,
+          [lastError?.message?.substring(0, 500) || 'Unknown error', deliveryId]
+        ).catch(() => {});
+      }
+      console.error(`[NotificationService] Channel ${channel} failed after ${maxAttempts} attempts:`, lastError?.message);
+    }
   }
 };
 
