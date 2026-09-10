@@ -255,18 +255,21 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     );
 
     let bookingToken = null;
+    let bookingRequestId = null;
     if (existingBooking.length === 0) {
       bookingToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + 7); // Default 7 days expiry
 
-      await connection.query(
+      const [insRes] = await connection.query(
         `INSERT INTO booking_requests (
           work_order_id, secure_token, earliest_date, status, expires_at
         ) VALUES (?, ?, CURDATE(), 'WAITING_FOR_BOOKING', ?)`,
         [workOrderId, bookingToken, expiresAt]
       );
+      bookingRequestId = insRes.insertId;
     } else {
+      bookingRequestId = existingBooking[0].id;
       bookingToken = existingBooking[0].secure_token;
       await connection.query(
         `UPDATE booking_requests SET status = 'WAITING_FOR_BOOKING' WHERE id = ? AND status != 'BOOKED'`,
@@ -291,7 +294,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
     const bookingAppointmentUrl = `${frontendBase}/booking/${bookingToken}`;
 
-    // 1. Notify Resident/Tenant via SMS & Email to select appointment date & time
+    // 1. Notify Resident/Tenant via SMS & Email (skip webhook to avoid duplicate before commit)
     if (resPhone || resEmail) {
       await notificationService.dispatch({
         recipientUserId: null,
@@ -314,6 +317,7 @@ const submitPublicQuoteUpload = async (req, res, next) => {
         channels: ['EMAIL', 'SMS'],
         contactEmail: resEmail,
         contactPhone: resPhone,
+        skipWebhook: true, // Only emit single n8n webhook after DB commit with verified entityId
         connection
       }).catch(err => console.error('[Tenant Booking Notification Dispatch Error]', err));
     }
@@ -356,10 +360,12 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     await connection.commit();
     connection.release();
 
-    // 4. Dispatch BOOKING_REQUEST event to N8N webhook
+    // 4. Dispatch single BOOKING_REQUEST event to N8N webhook after commit with entityId
     const bookingRequestWebhookPayload = {
       event: 'BOOKING_REQUEST',
       type: 'BOOKING_REQUEST',
+      entityId: bookingRequestId || workOrderId,
+      bookingRequestId: bookingRequestId || null,
       workOrderId: wo.id,
       jobNumber: wo.job_number,
       title: wo.title,
@@ -635,6 +641,7 @@ const submitPublicBooking = async (req, res, next) => {
     // 3. Send appointment confirmation SMS & Email to Tenant
     const resPhone = woRows[0]?.contact_phone;
     const resEmail = woRows[0]?.contact_email;
+    const tenantBookingDetailsUrl = `${frontendBase}/booking/${token}`;
     if (resPhone || resEmail) {
       await notificationService.dispatch({
         recipientUserId: null,
@@ -643,19 +650,38 @@ const submitPublicBooking = async (req, res, next) => {
         title: 'Maintenance Appointment Confirmed',
         messageTemplate: `Hi ${resName},\n\nYour maintenance appointment for "${jobTitle}" at ${resAddress} is confirmed for ${dateVal} (${slotVal}).\nAssigned Technician: ${techName}.\n\nThank you,\nNexus FMS Team`,
         structuredData: {
+          reference: workOrderId,
+          workOrderId: workOrderId,
+          jobNumber: jobNum,
+          name: resName,
           resident_name: resName,
-          title: jobTitle,
+          residentName: resName,
+          property: resAddress,
+          property_address: resAddress,
           address: resAddress,
+          date: dateVal,
           scheduled_date: dateVal,
+          scheduledDate: dateVal,
+          time: slotVal,
+          time_slot: slotVal,
+          timeSlot: slotVal,
           scheduled_time_slot: slotVal,
-          technician_name: techName
+          scheduledTimeSlot: slotVal,
+          technician_name: techName,
+          technicianName: techName,
+          actionUrl: tenantBookingDetailsUrl,
+          bookingUrl: tenantBookingDetailsUrl,
+          bookingLink: tenantBookingDetailsUrl,
         },
-        actionUrl: `/booking/${token}`,
+        actionUrl: tenantBookingDetailsUrl,
+        bookingUrl: tenantBookingDetailsUrl,
+        bookingLink: tenantBookingDetailsUrl,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         channels: ['EMAIL', 'SMS'],
         contactEmail: resEmail,
         contactPhone: resPhone,
+        propertyAddress: resAddress,
         connection
       }).catch(err => console.error('[Tenant Booking Confirmation Notification Error]', err));
     }

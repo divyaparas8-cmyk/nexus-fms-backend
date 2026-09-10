@@ -88,6 +88,105 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'BOOKING_CONFIRMED') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+    let token = formattedPayload.secureToken || formattedPayload.data?.token || formattedPayload.data?.secure_token || null;
+
+    if (!token && workOrderId) {
+      try {
+        const { pool } = require('../config/db');
+        const [bRows] = await pool.query(
+          'SELECT secure_token FROM booking_requests WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 1',
+          [workOrderId]
+        );
+        if (bRows.length > 0) token = bRows[0].secure_token;
+      } catch (e) {}
+    }
+
+    const bookingUrl = token ? `${frontendBase}/booking/${token}` : `${frontendBase}/maintenance/my-tasks`;
+    formattedPayload.actionUrl = bookingUrl;
+    formattedPayload.bookingUrl = bookingUrl;
+    formattedPayload.bookingLink = bookingUrl;
+
+    const dataObj = formattedPayload.data || {};
+    const resName = formattedPayload.residentName || formattedPayload.name || dataObj.resident_name || dataObj.residentName || null;
+    const propAddr = formattedPayload.propertyAddress || formattedPayload.property || dataObj.property_address || dataObj.property || dataObj.address || null;
+    const dateVal = formattedPayload.scheduledDate || formattedPayload.date || dataObj.scheduled_date || dataObj.date || null;
+    const timeVal = formattedPayload.scheduledTimeSlot || formattedPayload.timeSlot || formattedPayload.time || dataObj.scheduled_time_slot || dataObj.time_slot || dataObj.timeSlot || null;
+    const techName = formattedPayload.technicianName || dataObj.technician_name || null;
+
+    formattedPayload.reference = workOrderId;
+    formattedPayload.workOrderId = workOrderId;
+    formattedPayload.entityId = workOrderId;
+    formattedPayload.name = resName;
+    formattedPayload.residentName = resName;
+    formattedPayload.property = propAddr;
+    formattedPayload.propertyAddress = propAddr;
+    formattedPayload.date = dateVal;
+    formattedPayload.scheduledDate = dateVal;
+    formattedPayload.time = timeVal;
+    formattedPayload.timeSlot = timeVal;
+    formattedPayload.scheduledTimeSlot = timeVal;
+    formattedPayload.technicianName = techName;
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.actionUrl = bookingUrl;
+      formattedPayload.data.bookingUrl = bookingUrl;
+      formattedPayload.data.bookingLink = bookingUrl;
+      formattedPayload.data.reference = workOrderId;
+      formattedPayload.data.name = resName;
+      formattedPayload.data.residentName = resName;
+      formattedPayload.data.property = propAddr;
+      formattedPayload.data.propertyAddress = propAddr;
+      formattedPayload.data.date = dateVal;
+      formattedPayload.data.scheduledDate = dateVal;
+      formattedPayload.data.time = timeVal;
+      formattedPayload.data.timeSlot = timeVal;
+      formattedPayload.data.scheduledTimeSlot = timeVal;
+    }
+  }
+
+  if (eventType === 'BOOKING_REQUEST') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+    let token = formattedPayload.bookingToken || formattedPayload.secureToken || formattedPayload.data?.bookingToken || formattedPayload.data?.secure_token || null;
+
+    if (!token && workOrderId) {
+      try {
+        const { pool } = require('../config/db');
+        const [bRows] = await pool.query(
+          'SELECT secure_token FROM booking_requests WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 1',
+          [workOrderId]
+        );
+        if (bRows.length > 0) token = bRows[0].secure_token;
+      } catch (e) {}
+    }
+
+    if (token) {
+      const bookingUrl = `${frontendBase}/booking/${token}`;
+      formattedPayload.actionUrl = bookingUrl;
+      formattedPayload.bookingUrl = bookingUrl;
+      formattedPayload.bookingLink = bookingUrl;
+      if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+        formattedPayload.data.actionUrl = bookingUrl;
+        formattedPayload.data.bookingUrl = bookingUrl;
+        formattedPayload.data.bookingLink = bookingUrl;
+      }
+    }
+
+    const dataObj = formattedPayload.data || {};
+    const resName = formattedPayload.residentName || formattedPayload.name || dataObj.resident_name || dataObj.residentName || null;
+    const propAddr = formattedPayload.propertyAddress || formattedPayload.property || dataObj.property_address || dataObj.property || dataObj.address || null;
+
+    formattedPayload.reference = workOrderId;
+    formattedPayload.workOrderId = workOrderId;
+    formattedPayload.name = resName;
+    formattedPayload.residentName = resName;
+    formattedPayload.property = propAddr;
+    formattedPayload.propertyAddress = propAddr;
+  }
+
   const eventData = {
     event: eventType,
     timestamp: new Date().toISOString(),

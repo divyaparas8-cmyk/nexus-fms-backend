@@ -249,6 +249,62 @@ const notificationService = {
               n8nPayload.data.bookingLink = bookingUrl;
             }
           }
+        } else if (type === 'BOOKING_CONFIRMED') {
+          const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+          const workOrderId = relatedEntityId || n8nPayload.entityId;
+          n8nPayload.workOrderId = workOrderId;
+          n8nPayload.entityId = workOrderId;
+          n8nPayload.reference = workOrderId;
+
+          // Resolve secure token if missing
+          let token = n8nPayload.data?.token || n8nPayload.data?.secure_token || n8nPayload.secureToken || null;
+          if (!token && workOrderId) {
+            try {
+              const [bRows] = await db.query(
+                'SELECT secure_token FROM booking_requests WHERE work_order_id = ? ORDER BY created_at DESC LIMIT 1',
+                [workOrderId]
+              );
+              if (bRows.length > 0) token = bRows[0].secure_token;
+            } catch (e) {}
+          }
+
+          const bookingUrl = token ? `${frontendBase}/booking/${token}` : `${frontendBase}/maintenance/my-tasks`;
+          n8nPayload.actionUrl = bookingUrl;
+          n8nPayload.bookingUrl = bookingUrl;
+          n8nPayload.bookingLink = bookingUrl;
+
+          // Ensure resident name, property address, date and time slot are present at top level
+          const dataObj = n8nPayload.data || {};
+          const resName = n8nPayload.residentName || n8nPayload.name || dataObj.resident_name || dataObj.residentName || null;
+          const propAddr = n8nPayload.propertyAddress || n8nPayload.property || dataObj.address || dataObj.property_address || dataObj.property || null;
+          const dateVal = n8nPayload.scheduledDate || n8nPayload.date || dataObj.scheduled_date || dataObj.date || null;
+          const timeVal = n8nPayload.scheduledTimeSlot || n8nPayload.timeSlot || n8nPayload.time || dataObj.scheduled_time_slot || dataObj.time_slot || dataObj.timeSlot || null;
+
+          n8nPayload.name = resName;
+          n8nPayload.residentName = resName;
+          n8nPayload.property = propAddr;
+          n8nPayload.propertyAddress = propAddr;
+          n8nPayload.date = dateVal;
+          n8nPayload.scheduledDate = dateVal;
+          n8nPayload.time = timeVal;
+          n8nPayload.timeSlot = timeVal;
+          n8nPayload.scheduledTimeSlot = timeVal;
+
+          if (n8nPayload.data && typeof n8nPayload.data === 'object') {
+            n8nPayload.data.actionUrl = bookingUrl;
+            n8nPayload.data.bookingUrl = bookingUrl;
+            n8nPayload.data.bookingLink = bookingUrl;
+            n8nPayload.data.reference = workOrderId;
+            n8nPayload.data.name = resName;
+            n8nPayload.data.residentName = resName;
+            n8nPayload.data.property = propAddr;
+            n8nPayload.data.propertyAddress = propAddr;
+            n8nPayload.data.date = dateVal;
+            n8nPayload.data.scheduledDate = dateVal;
+            n8nPayload.data.time = timeVal;
+            n8nPayload.data.timeSlot = timeVal;
+            n8nPayload.data.scheduledTimeSlot = timeVal;
+          }
         }
 
         dispatchN8NWebhook(type, n8nPayload).catch(err => console.warn('[N8N_DISPATCH_WARN] Async webhook skipped:', err.message));

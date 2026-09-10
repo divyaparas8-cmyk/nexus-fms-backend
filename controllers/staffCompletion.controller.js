@@ -20,6 +20,15 @@ const getStaffProfileId = async (userId) => {
 };
 
 
+// Helper to format static media paths to absolute URLs
+const formatMediaUrl = (url) => {
+  if (!url) return '';
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  const backendBase = (process.env.BACKEND_URL || process.env.API_BASE_URL || 'https://nexus-fms-backend-production.up.railway.app').replace(/\/$/, '').replace(/\/api\/v1\/?$/, '');
+  const cleanPath = url.startsWith('/') ? url : `/${url}`;
+  return `${backendBase}${cleanPath}`;
+};
+
 // Helper to format raw database row to Frontend job object
 const formatJobRow = (r, mediaList = []) => ({
   id: r.id,
@@ -45,11 +54,11 @@ const formatJobRow = (r, mediaList = []) => ({
   residentPhotos: mediaList.map(m => ({
     id: m.id,
     fileName: m.file_name,
-    filePath: m.file_path,
+    filePath: formatMediaUrl(m.file_path),
     mediaType: m.media_type || 'PHOTO',
     createdAt: m.created_at
   })),
-  photoUrls: mediaList.map(m => m.file_path)
+  photoUrls: mediaList.map(m => formatMediaUrl(m.file_path))
 });
 
 // @desc    Get all work orders assigned to the authenticated technician
