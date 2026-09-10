@@ -824,23 +824,8 @@ const completeJobAtomic = async (req, res, next) => {
       }
     }
 
-    // Enforce mandatory after-photo upload (with fallback to image receipts or beforePhotos)
-    let afterPhotoFiles = req.files && req.files['afterPhotos'] ? req.files['afterPhotos'] : [];
-    if (afterPhotoFiles.length === 0 && req.files && req.files['receipts']) {
-      const imageReceipts = req.files['receipts'].filter(f => f.mimetype && f.mimetype.startsWith('image/'));
-      if (imageReceipts.length > 0) {
-        afterPhotoFiles = imageReceipts;
-        req.files['afterPhotos'] = imageReceipts;
-      }
-    }
-    if (afterPhotoFiles.length === 0 && req.files && req.files['beforePhotos']) {
-      const imageBefore = req.files['beforePhotos'].filter(f => f.mimetype && f.mimetype.startsWith('image/'));
-      if (imageBefore.length > 0) {
-        afterPhotoFiles = imageBefore;
-        req.files['afterPhotos'] = imageBefore;
-      }
-    }
-
+    // Enforce mandatory after-photo upload
+    const afterPhotoFiles = req.files && req.files['afterPhotos'] ? req.files['afterPhotos'] : [];
     if (afterPhotoFiles.length === 0) {
       if (req.files) Object.values(req.files).flat().forEach(f => require('fs').unlink(f.path, () => {}));
       connection.release();
