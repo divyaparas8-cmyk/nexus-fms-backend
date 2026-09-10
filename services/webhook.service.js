@@ -48,6 +48,30 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'TASK_REASSIGNED' || eventType === 'TASK_UNASSIGNED') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+
+    if (workOrderId) {
+      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
+      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
+    }
+    if (!formattedPayload.actionUrl) {
+      formattedPayload.actionUrl = `${frontendBase}/maintenance/my-tasks`;
+    }
+
+    formattedPayload.technicianName = formattedPayload.technicianName || formattedPayload.technician?.name || formattedPayload.previousTechnician?.name || null;
+    formattedPayload.technicianPhone = formattedPayload.technicianPhone || formattedPayload.technician?.phone || formattedPayload.previousTechnician?.phone || formattedPayload.contactPhone || null;
+    formattedPayload.propertyAddress = formattedPayload.propertyAddress || formattedPayload.address || null;
+    formattedPayload.title = formattedPayload.title || 'Task Reassigned to Another Technician';
+
+    if (!formattedPayload.message) {
+      const jobDesc = formattedPayload.jobNumber ? `Job #${formattedPayload.jobNumber}` : (formattedPayload.title || `Work Order #${workOrderId || ''}`);
+      const addrDesc = formattedPayload.propertyAddress ? ` at ${formattedPayload.propertyAddress}` : '';
+      formattedPayload.message = `${jobDesc}${addrDesc} has been reassigned to another technician. You are relieved from this task.`;
+    }
+  }
+
   if (eventType === 'QUOTE_PHOTO_REQUEST' || eventType === 'NEW_QUOTE_REQUEST') {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;

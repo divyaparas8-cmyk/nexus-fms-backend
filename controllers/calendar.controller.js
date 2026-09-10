@@ -1,6 +1,7 @@
 const { pool } = require('../config/db');
 const { calculateStaffAvailableSlots, calculateMultiStaffAvailableSlots, timeToMinutes } = require('../services/availability.service');
 const notificationService = require('../services/notification.service');
+const { dispatchN8NWebhook } = require('../services/webhook.service');
 
 // Helper to resolve staff profile ID from logged in user ID
 const getStaffProfileId = async (userId) => {
@@ -414,27 +415,126 @@ const dispatchJob = async (req, res, next) => {
       [targetJobId]
     );
 
-    // Create Notification for the assigned staff
+    const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+    const jobNum = updatedRows[0]?.job_number || `JOB-${targetJobId}`;
+    const directJobActionUrl = `${frontendBase}/jobs/${targetJobId}`;
+
+    // 1. If reassigned from a different staff, notify previous staff
+    if (job.assigned_staff_id && job.assigned_staff_id !== finalStaffId) {
+      try {
+        const [prevStaffRows] = await pool.query(
+          "SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone, u.email FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?",
+          [job.assigned_staff_id]
+        );
+        if (prevStaffRows.length > 0) {
+          const prevStaff = prevStaffRows[0];
+          const reassignedMsg = `Work Order #${jobNum} (${updatedRows[0]?.title || 'Task'}) at ${updatedRows[0]?.live_property_address || updatedRows[0]?.property_address || ''} has been reassigned to another technician. You are relieved from this task.`;
+          await notificationService.createNotification({
+            recipientUserId: prevStaff.user_id,
+            recipientRole: 'MAINTENANCE_STAFF',
+            type: 'TASK_REASSIGNED',
+            title: 'Task Reassigned to Another Staff',
+            message: reassignedMsg,
+            relatedEntityType: 'work_orders',
+            relatedEntityId: parseInt(targetJobId, 10),
+            actionUrl: `${frontendBase}/maintenance/my-tasks`,
+            contactPhone: prevStaff.staff_phone || prevStaff.user_phone,
+            contactEmail: prevStaff.email,
+            technicianName: prevStaff.full_name,
+            technicianPhone: prevStaff.staff_phone || prevStaff.user_phone,
+            propertyAddress: updatedRows[0]?.live_property_address || updatedRows[0]?.property_address,
+            channels: ['IN_APP', 'SMS', 'EMAIL'],
+          });
+
+          dispatchN8NWebhook('TASK_REASSIGNED', {
+            event: 'TASK_REASSIGNED',
+            type: 'TASK_REASSIGNED',
+            entityId: parseInt(targetJobId, 10),
+            workOrderId: parseInt(targetJobId, 10),
+            jobNumber: jobNum,
+            title: updatedRows[0]?.title,
+            propertyAddress: updatedRows[0]?.live_property_address || updatedRows[0]?.property_address,
+            scheduledDate: targetDate,
+            scheduledTimeSlot: targetSlot,
+            previousTechnician: {
+              id: prevStaff.id,
+              name: prevStaff.full_name,
+              phone: prevStaff.staff_phone || prevStaff.user_phone,
+              email: prevStaff.email,
+            },
+            technicianName: prevStaff.full_name,
+            technicianPhone: prevStaff.staff_phone || prevStaff.user_phone,
+            technicianEmail: prevStaff.email,
+            contactPhone: prevStaff.staff_phone || prevStaff.user_phone,
+            contactEmail: prevStaff.email,
+            message: reassignedMsg,
+            actionUrl: `${frontendBase}/maintenance/my-tasks`,
+            reassignedBy: req.user?.full_name || 'Office Admin',
+          }).catch(err => console.warn('[N8N] Reassignment webhook warn:', err.message));
+        }
+      } catch (prevErr) {
+        console.warn('[Calendar] Failed to notify previous staff on reassignment:', prevErr.message);
+      }
+    }
+
+    // 2. Create Notification & Webhook for the newly assigned staff
     try {
       const [staffUserRows] = await pool.query(
-        "SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?",
+        "SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone, u.email FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?",
         [finalStaffId]
       );
       
       if (staffUserRows.length > 0) {
         const staff = staffUserRows[0];
-        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+        const newAssignMsg = `You have been assigned to Job #${jobNum}: ${updatedRows[0]?.title || 'Maintenance Task'} at ${updatedRows[0]?.live_property_address || updatedRows[0]?.property_address || ''} on ${targetDate} (${targetSlot}). View task: ${directJobActionUrl}`;
+
         await notificationService.createNotification({
           recipientUserId: staff.user_id,
+          recipientRole: 'MAINTENANCE_STAFF',
           type: 'TASK_ASSIGNED',
           title: 'New Task Assigned',
-          message: `You have been assigned to Work Order #${targetJobId} on ${targetDate} at ${targetSlot}.`,
+          message: newAssignMsg,
           relatedEntityType: 'work_orders',
           relatedEntityId: parseInt(targetJobId, 10),
-          actionUrl: `${frontendBase}/jobs/${targetJobId}`,
+          actionUrl: directJobActionUrl,
           technicianName: staff.full_name,
           technicianPhone: staff.staff_phone || staff.user_phone,
+          contactPhone: staff.staff_phone || staff.user_phone,
+          contactEmail: staff.email,
+          propertyAddress: updatedRows[0]?.live_property_address || updatedRows[0]?.property_address,
+          channels: ['IN_APP', 'SMS', 'EMAIL'],
         });
+
+        dispatchN8NWebhook('TASK_ASSIGNED', {
+          event: 'TASK_ASSIGNED',
+          type: 'TASK_ASSIGNED',
+          entityId: parseInt(targetJobId, 10),
+          workOrderId: parseInt(targetJobId, 10),
+          jobNumber: jobNum,
+          title: updatedRows[0]?.title,
+          message: newAssignMsg,
+          scheduledDate: targetDate,
+          scheduledTimeSlot: targetSlot,
+          priority: updatedRows[0]?.priority || 'NORMAL',
+          propertyAddress: updatedRows[0]?.live_property_address || updatedRows[0]?.property_address,
+          residentName: updatedRows[0]?.live_resident_name || updatedRows[0]?.resident_name,
+          residentPhone: updatedRows[0]?.live_contact_phone || updatedRows[0]?.contact_phone,
+          residentEmail: updatedRows[0]?.live_contact_email || updatedRows[0]?.contact_email,
+          residentNotes: updatedRows[0]?.description || '',
+          technicianName: staff.full_name,
+          technicianEmail: staff.email,
+          technicianPhone: staff.staff_phone || staff.user_phone,
+          technician: {
+            id: staff.id,
+            name: staff.full_name,
+            email: staff.email,
+            phone: staff.staff_phone || staff.user_phone,
+          },
+          contactPhone: staff.staff_phone || staff.user_phone,
+          contactEmail: staff.email,
+          assignmentType: (job.assigned_staff_id && job.assigned_staff_id !== finalStaffId) ? 'REASSIGNMENT' : 'CALENDAR_DISPATCH',
+          actionUrl: directJobActionUrl,
+        }).catch(err => console.warn('[N8N] Dispatch webhook warn:', err.message));
       }
     } catch (notifErr) {
       console.error('[Notification] Failed to notify on job dispatch:', notifErr);

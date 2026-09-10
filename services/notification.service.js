@@ -50,17 +50,21 @@ const notificationService = {
    */
   async createNotification(data, connection = null) {
     // Map old style to new style
+    const phone = data.contactPhone || data.technicianPhone || null;
+    const email = data.contactEmail || null;
     return this.dispatch({
       recipientUserId: data.recipientUserId,
-      recipientRole: 'OFFICE_ADMIN', // Assume admin for legacy generic alerts unless specified otherwise
+      recipientRole: data.recipientRole || 'OFFICE_ADMIN', // Default role if unspecified
       type: data.type,
       title: data.title,
       messageTemplate: data.message,
-      structuredData: null,
+      structuredData: data.data || null,
       relatedEntityType: data.relatedEntityType,
       relatedEntityId: data.relatedEntityId,
       actionUrl: data.actionUrl,
-      channels: ['IN_APP'], // Legacy calls only trigger IN_APP and socket
+      channels: data.channels || (phone || email ? ['IN_APP', 'SMS', 'EMAIL'] : ['IN_APP']),
+      contactEmail: email,
+      contactPhone: phone,
       technicianName: data.technicianName || null,
       technicianPhone: data.technicianPhone || null,
       propertyAddress: data.propertyAddress || null,
@@ -149,12 +153,14 @@ const notificationService = {
           data: sanitizedData || structuredData || null,
         };
 
-        if (type === 'TASK_ASSIGNED') {
+        if (type === 'TASK_ASSIGNED' || type === 'TASK_REASSIGNED') {
           const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
           const workOrderId = relatedEntityId || n8nPayload.entityId;
           n8nPayload.workOrderId = workOrderId;
           n8nPayload.entityId = workOrderId;
-          n8nPayload.actionUrl = workOrderId ? `${frontendBase}/jobs/${workOrderId}` : (actionUrl || `${frontendBase}/maintenance/my-tasks`);
+          n8nPayload.actionUrl = (type === 'TASK_ASSIGNED')
+            ? (workOrderId ? `${frontendBase}/jobs/${workOrderId}` : (actionUrl || `${frontendBase}/maintenance/my-tasks`))
+            : (actionUrl || `${frontendBase}/maintenance/my-tasks`);
 
           // Fetch technician details if missing
           if (recipientUserId && (!n8nPayload.technicianName || !n8nPayload.technicianPhone)) {
