@@ -6,6 +6,7 @@ const {
   createStaff,
   updateStaff,
   deleteStaff,
+  savePushToken,
 } = require('../controllers/staff.controller');
 const { authenticateToken, authorizeRoles } = require('../middleware/auth.middleware');
 
@@ -20,6 +21,9 @@ const photoUpload = require('../middleware/photoUpload.middleware');
 
 // All staff routes require JWT authentication
 router.use(authenticateToken);
+
+// Device Push Token registration
+router.put('/push-token', savePushToken);
 
 // Technician Assigned Work Orders Endpoints (Must be mounted before /:id)
 router.get('/my-jobs', getMyAssignedJobs);

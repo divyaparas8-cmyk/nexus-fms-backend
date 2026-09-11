@@ -835,9 +835,11 @@ const completeJobAtomic = async (req, res, next) => {
         parsedMaterials = JSON.parse(materials);
         if (!Array.isArray(parsedMaterials)) throw new Error('Materials must be an array');
         for (const m of parsedMaterials) {
-          if (!m.material_name || m.material_name.trim() === '') throw new Error('Material name is required');
-          if (isNaN(m.quantity) || Number(m.quantity) <= 0) throw new Error('Quantity must be > 0');
-          if (isNaN(m.unit_cost) || Number(m.unit_cost) < 0) throw new Error('Unit cost must be >= 0');
+          if (!m.material_name && m.description) m.material_name = m.description;
+          if (!m.material_name || m.material_name.trim() === '') throw new Error('Material name or description is required');
+          if (m.unit_cost === undefined && m.price !== undefined) m.unit_cost = m.price;
+          if (m.quantity === undefined || isNaN(m.quantity) || Number(m.quantity) <= 0) m.quantity = 1;
+          if (isNaN(m.unit_cost) || Number(m.unit_cost) < 0) throw new Error('Unit cost / price must be >= 0');
         }
       } catch (err) {
         if (req.files) Object.values(req.files).flat().forEach(f => fs.unlink(f.path, () => {}));

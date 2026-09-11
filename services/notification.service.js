@@ -1,4 +1,5 @@
 const { pool } = require('../config/db');
+const axios = require('axios');
 const { sendEmail } = require('./notification/providers/email.provider');
 const { sendSms } = require('./notification/providers/sms.provider');
 const { dispatchN8NWebhook } = require('./webhook.service');
@@ -161,6 +162,15 @@ const notificationService = {
         }
       }
 
+      // Dispatch native mobile push notification if recipient user has registered an Expo push token
+      if (recipientUserId) {
+        this._dispatchMobilePushNotification(db, recipientUserId, title, finalMessage, {
+          jobId: relatedEntityId,
+          entityType: relatedEntityType,
+          type,
+          actionUrl,
+        }).catch(e => console.warn('[NotificationService] Mobile push dispatch error:', e.message));
+      }
 
       // Never send external webhooks for internal admin pipeline movements
       if (type === 'PIPELINE_UPDATE' || type === 'PIPELINE_STAGE_UPDATED') {
@@ -585,7 +595,45 @@ const notificationService = {
       }
       console.error(`[NotificationService] Channel ${channel} failed after ${maxAttempts} attempts:`, lastError?.message);
     }
+  },
+
+  /**
+   * Dispatch native mobile push notification via Expo Push Notification API
+   */
+  async _dispatchMobilePushNotification(db, userId, title, body, data = {}) {
+    try {
+      // Check if user has registered an Expo push token
+      const [rows] = await db.query('SELECT push_token FROM users WHERE id = ? LIMIT 1', [userId]);
+      const pushToken = rows && rows[0]?.push_token;
+      if (!pushToken || typeof pushToken !== 'string' || !pushToken.trim()) {
+        return; // User has not logged into mobile app or token not registered
+      }
+
+      const expoPayload = {
+        to: pushToken.trim(),
+        sound: 'default',
+        title: title || 'Nexus FMS Alert',
+        body: body || '',
+        data: data,
+        priority: 'high',
+        channelId: 'nexus-alerts',
+      };
+
+      const res = await axios.post('https://exp.host/--/api/v2/push/send', expoPayload, {
+        headers: {
+          'Accept': 'application/json',
+          'Accept-encoding': 'gzip, deflate',
+          'Content-Type': 'application/json',
+        },
+        timeout: 6000,
+      });
+
+      console.log(`[NotificationService] Push notification sent to user ${userId}:`, res.data?.data?.status || 'OK');
+    } catch (err) {
+      console.warn(`[NotificationService] Push notification dispatch failed for user ${userId}:`, err.message);
+    }
   }
 };
 
 module.exports = notificationService;
+

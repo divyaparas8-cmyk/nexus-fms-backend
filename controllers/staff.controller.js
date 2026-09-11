@@ -616,10 +616,41 @@ const deleteStaff = async (req, res, next) => {
   }
 };
 
+// @desc    Save mobile app push notification token for logged-in user
+// @route   PUT /api/v1/staff/push-token
+// @access  Private (JWT Required)
+const savePushToken = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { pushToken } = req.body;
+    if (!pushToken || typeof pushToken !== 'string') {
+      return res.status(400).json({ success: false, message: 'Valid pushToken is required' });
+    }
+
+    // Auto-ensure column exists in users table safely
+    try {
+      await pool.query('ALTER TABLE users ADD COLUMN push_token VARCHAR(255) DEFAULT NULL');
+    } catch (colErr) {
+      // Column already exists or already updated, safe to continue
+    }
+
+    await pool.query('UPDATE users SET push_token = ? WHERE id = ?', [pushToken.trim(), userId]);
+    return res.status(200).json({
+      success: true,
+      message: 'Mobile push notification token registered successfully.',
+    });
+  } catch (err) {
+    console.error('[savePushToken] Error:', err.message);
+    return res.status(500).json({ success: false, message: 'Failed to save push token' });
+  }
+};
+
 module.exports = {
   getStaff,
   getStaffById,
   createStaff,
   updateStaff,
   deleteStaff,
+  savePushToken,
 };
+

@@ -234,14 +234,14 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     if (requestId) {
       await connection.query(
         'UPDATE quote_requests SET status = ?, resident_description_report = ?, submitted_at = NOW() WHERE id = ?',
-        ['COMPLETED', userNotes || null, requestId]
+        ['SUBMITTED', userNotes || null, requestId]
       );
     }
 
-    // Update work order description and transition to Completed Quotes
+    // Update work order description and transition to READY_TO_QUOTE (Ready to Quote stage in pipeline)
     await connection.query(
       `UPDATE work_orders SET 
-        pipeline_stage = 'Completed Quotes',
+        pipeline_stage = 'READY_TO_QUOTE',
         description = CASE 
           WHEN description IS NULL OR description = '' THEN ? 
           ELSE CONCAT(description, '\n\n[Resident Upload Notes]: ', ?) 
@@ -249,35 +249,6 @@ const submitPublicQuoteUpload = async (req, res, next) => {
        WHERE id = ?`,
       [noteText, noteText, workOrderId]
     );
-
-    // Automatically generate booking request if not exists
-    const [existingBooking] = await connection.query(
-      'SELECT id, secure_token FROM booking_requests WHERE work_order_id = ?',
-      [workOrderId]
-    );
-
-    let bookingToken = null;
-    let bookingRequestId = null;
-    if (existingBooking.length === 0) {
-      bookingToken = `tok_${crypto.randomBytes(16).toString('hex')}`;
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 7); // Default 7 days expiry
-
-      const [insRes] = await connection.query(
-        `INSERT INTO booking_requests (
-          work_order_id, secure_token, earliest_date, status, expires_at
-        ) VALUES (?, ?, CURDATE(), 'WAITING_FOR_BOOKING', ?)`,
-        [workOrderId, bookingToken, expiresAt]
-      );
-      bookingRequestId = insRes.insertId;
-    } else {
-      bookingRequestId = existingBooking[0].id;
-      bookingToken = existingBooking[0].secure_token;
-      await connection.query(
-        `UPDATE booking_requests SET status = 'WAITING_FOR_BOOKING' WHERE id = ? AND status != 'BOOKED'`,
-        [existingBooking[0].id]
-      );
-    }
 
     const [admins] = await connection.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
     const [woRows] = await connection.query(
@@ -290,50 +261,17 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     const jobTitle = wo.title || 'Repair Job';
     const resName = wo.resident_name || 'Resident';
     const resAddress = wo.property_address || 'Property';
-    const resPhone = wo.contact_phone || wo.resident_phone;
-    const resEmail = wo.contact_email || wo.resident_email;
 
-    const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
-    const bookingAppointmentUrl = `${frontendBase}/booking/${bookingToken}`;
-
-    // 1. Notify Resident/Tenant via SMS & Email (skip webhook to avoid duplicate before commit)
-    if (resPhone || resEmail) {
-      await notificationService.dispatch({
-        recipientUserId: null,
-        recipientRole: 'TENANT',
-        type: 'BOOKING_REQUEST',
-        title: 'Please Select Your Maintenance Appointment',
-        messageTemplate: `Hi ${resName},\n\nWe received your photos for "${jobTitle}". Please select a convenient date and time for your maintenance visit using this secure link:\n${bookingAppointmentUrl}\n\nThank you,\nNexus FMS Team`,
-        structuredData: {
-          resident_name: resName,
-          bookingLink: bookingAppointmentUrl,
-          actionUrl: bookingAppointmentUrl,
-          workOrderId: workOrderId,
-          jobNumber: wo.job_number,
-          title: jobTitle,
-          address: resAddress,
-        },
-        actionUrl: bookingAppointmentUrl,
-        relatedEntityType: 'work_orders',
-        relatedEntityId: workOrderId,
-        channels: ['EMAIL', 'SMS'],
-        contactEmail: resEmail,
-        contactPhone: resPhone,
-        skipWebhook: true, // Only emit single n8n webhook after DB commit with verified entityId
-        connection
-      }).catch(err => console.error('[Tenant Booking Notification Dispatch Error]', err));
-    }
-
-    // 2. Notify Admins that quote photos were submitted
+    // Notify Admins that resident uploaded photos and work order is Ready to Quote
     for (const admin of admins) {
       await notificationService.createNotification({
         recipientUserId: admin.id,
         type: 'QUOTE_PHOTOS_SUBMITTED',
-        title: 'Quote photos/details received',
-        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order moved to Completed Quotes. Booking link active.`,
+        title: 'Resident submitted quote photos',
+        message: `Photos uploaded for ${jobTitle} by ${resName} at ${resAddress}. Work Order is now Ready to Quote.`,
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
-        actionUrl: `/admin/quote-requests`
+        actionUrl: `/admin/pipeline?stage=READY_TO_QUOTE`
       }, connection);
     }
 
@@ -362,37 +300,11 @@ const submitPublicQuoteUpload = async (req, res, next) => {
     await connection.commit();
     connection.release();
 
-    // 4. Dispatch single BOOKING_REQUEST event to N8N webhook after commit with entityId
-    const bookingRequestWebhookPayload = {
-      event: 'BOOKING_REQUEST',
-      type: 'BOOKING_REQUEST',
-      entityId: bookingRequestId || workOrderId,
-      bookingRequestId: bookingRequestId || null,
-      workOrderId: wo.id,
-      jobNumber: wo.job_number,
-      title: wo.title,
-      propertyAddress: wo.property_address,
-      residentName: wo.resident_name,
-      contactPhone: resPhone,
-      contactEmail: resEmail,
-      residentNotes: userNotes || '',
-      bookingToken,
-      bookingLink: bookingAppointmentUrl,
-      actionUrl: bookingAppointmentUrl,
-      photoCount: savedMediaList.length,
-      photoUrls: savedMediaList.map(m => m.filePath),
-    };
-    dispatchN8NWebhook('BOOKING_REQUEST', bookingRequestWebhookPayload).catch(err => {
-      console.warn('[N8N_DISPATCH_WARN] Failed to dispatch BOOKING_REQUEST webhook:', err.message);
-    });
-
     res.status(200).json({
       success: true,
-      message: 'Photo/Video report submitted successfully.',
+      message: 'Photo/Video report submitted successfully. Our team will review and prepare your quote shortly.',
       data: {
         workOrderId,
-        bookingToken,
-        bookingUrl: bookingAppointmentUrl,
         filesUploaded: savedMediaList.length,
         media: savedMediaList,
       },

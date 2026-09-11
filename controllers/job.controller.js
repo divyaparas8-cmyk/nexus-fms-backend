@@ -169,9 +169,10 @@ const getJobs = async (req, res, next) => {
     const jobIds = rows.map(r => r.id);
     let mediaByJob = {};
     let reportByJob = {};
+    let customerMediaByJob = {};
     if (jobIds.length > 0) {
       try {
-        const [[mediaRows], [reportRows]] = await Promise.all([
+        const [[mediaRows], [reportRows], [customerMediaRows]] = await Promise.all([
           pool.query(
             'SELECT id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type, created_at FROM staff_completion_media WHERE work_order_id IN (?)',
             [jobIds]
@@ -179,7 +180,14 @@ const getJobs = async (req, res, next) => {
           pool.query(
             'SELECT id, work_order_id, staff_id, work_report_summary, materials_used, completion_status, completed_at FROM staff_job_completions WHERE work_order_id IN (?)',
             [jobIds]
-          )
+          ),
+          pool.query(
+            'SELECT id, work_order_id, quote_request_id, file_name, file_path, file_size_bytes, media_type, created_at FROM customer_media_uploads WHERE work_order_id IN (?)',
+            [jobIds]
+          ).catch(err => {
+            console.warn('[job.controller] Error fetching customer media:', err.message);
+            return [[]];
+          })
         ]);
         mediaRows.forEach(m => {
           if (!mediaByJob[m.work_order_id]) mediaByJob[m.work_order_id] = [];
@@ -203,8 +211,21 @@ const getJobs = async (req, res, next) => {
             completedAt: r.completed_at,
           };
         });
+
+        customerMediaRows.forEach(cm => {
+          if (!customerMediaByJob[cm.work_order_id]) customerMediaByJob[cm.work_order_id] = [];
+          customerMediaByJob[cm.work_order_id].push({
+            id: cm.id,
+            quoteRequestId: cm.quote_request_id,
+            fileName: cm.file_name,
+            filePath: cm.file_path,
+            fileSize: cm.file_size_bytes,
+            mediaType: cm.media_type,
+            uploadedAt: cm.created_at,
+          });
+        });
       } catch (err) {
-        console.warn('[job.controller] Error fetching completion media:', err.message);
+        console.warn('[job.controller] Error fetching media/reports:', err.message);
       }
     }
 
@@ -212,6 +233,8 @@ const getJobs = async (req, res, next) => {
       const formatted = formatJobRow(r, req.user ? req.user.role : null);
       formatted.completionPhotos = mediaByJob[r.id] || [];
       formatted.completionReport = reportByJob[r.id] || null;
+      formatted.customerPhotos = customerMediaByJob[r.id] || [];
+      formatted.customerPhotosCount = (customerMediaByJob[r.id] || []).length;
       return formatted;
     });
 
@@ -272,8 +295,9 @@ const getJobById = async (req, res, next) => {
 
     let completionPhotos = [];
     let completionReport = null;
+    let customerPhotos = [];
     try {
-      const [[mediaRows], [reportRows]] = await Promise.all([
+      const [[mediaRows], [reportRows], [customerMediaRows]] = await Promise.all([
         pool.query(
           'SELECT id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type, created_at FROM staff_completion_media WHERE work_order_id = ?',
           [rows[0].id]
@@ -281,7 +305,14 @@ const getJobById = async (req, res, next) => {
         pool.query(
           'SELECT id, work_order_id, staff_id, work_report_summary, materials_used, completion_status, completed_at FROM staff_job_completions WHERE work_order_id = ?',
           [rows[0].id]
-        )
+        ),
+        pool.query(
+          'SELECT id, work_order_id, quote_request_id, file_name, file_path, file_size_bytes, media_type, created_at FROM customer_media_uploads WHERE work_order_id = ?',
+          [rows[0].id]
+        ).catch(err => {
+          console.warn('[job.controller] Error fetching customer media for single job:', err.message);
+          return [[]];
+        })
       ]);
 
       completionPhotos = mediaRows.map(m => ({
@@ -292,6 +323,16 @@ const getJobById = async (req, res, next) => {
         mimeType: m.mime_type,
         mediaType: m.media_type,
         uploadedAt: m.created_at,
+      }));
+
+      customerPhotos = customerMediaRows.map(cm => ({
+        id: cm.id,
+        quoteRequestId: cm.quote_request_id,
+        fileName: cm.file_name,
+        filePath: cm.file_path,
+        fileSize: cm.file_size_bytes,
+        mediaType: cm.media_type,
+        uploadedAt: cm.created_at,
       }));
 
       if (reportRows.length > 0) {
@@ -310,6 +351,8 @@ const getJobById = async (req, res, next) => {
     const formatted = formatJobRow(rows[0], req.user ? req.user.role : null);
     formatted.completionPhotos = completionPhotos;
     formatted.completionReport = completionReport;
+    formatted.customerPhotos = customerPhotos;
+    formatted.customerPhotosCount = customerPhotos.length;
 
     res.status(200).json({
       success: true,
@@ -633,7 +676,7 @@ const moveJobStage = async (req, res, next) => {
     const { section, pipeline_stage } = req.body;
     const newStage = pipeline_stage || section;
 
-    const allowedStages = ['Quotes', 'Completed Quotes', 'Jobs', 'Completed Jobs', 'Jobs Waiting Booking', 'Invoiced', 'Invoice'];
+    const allowedStages = ['Quotes', 'Ready to Quote', 'READY_TO_QUOTE', 'Completed Quotes', 'Jobs', 'Completed Jobs', 'Jobs Waiting Booking', 'Invoiced', 'Invoice'];
     if (!newStage || !allowedStages.includes(newStage)) {
       return res.status(400).json({
         success: false,
@@ -641,7 +684,10 @@ const moveJobStage = async (req, res, next) => {
       });
     }
 
-    const normalizedStage = newStage === 'Invoice' ? 'Invoiced' : newStage;
+    let normalizedStage = newStage === 'Invoice' ? 'Invoiced' : newStage;
+    if (normalizedStage === 'Ready to Quote') {
+      normalizedStage = 'READY_TO_QUOTE';
+    }
 
     const [existing] = await pool.query('SELECT id, assigned_staff_id, pipeline_stage FROM work_orders WHERE id = ?', [id]);
     if (existing.length === 0) {
@@ -682,10 +728,31 @@ const moveJobStage = async (req, res, next) => {
       });
     }
 
+    // When admin moves quote to Completed Quotes: trigger single booking request to resident (if not already sent)
+    if (normalizedStage === 'Completed Quotes' && existing[0].pipeline_stage !== 'Completed Quotes') {
+      const [existingBooking] = await pool.query(
+        'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
+        [id]
+      );
+      if (existingBooking.length === 0 || existingBooking[0].status === 'EXPIRED') {
+        await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+          console.error('[moveJobStage] Error triggering auto booking request on Completed Quotes:', err.message);
+        });
+      } else {
+        console.log(`[moveJobStage] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
+      }
+    }
+
     if (normalizedStage === 'Jobs' && existing[0].pipeline_stage !== 'Jobs') {
-      await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
-        console.error('[moveJobStage] Error triggering auto booking request:', err.message);
-      });
+      const [existingBooking] = await pool.query(
+        'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
+        [id]
+      );
+      if (existingBooking.length === 0) {
+        await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+          console.error('[moveJobStage] Error triggering auto booking request:', err.message);
+        });
+      }
     }
 
     const [updatedRows] = await pool.query(
@@ -901,7 +968,10 @@ const updateJobStatus = async (req, res, next) => {
       }
     }
 
-    const newStage = pipeline_stage || section;
+    const rawNewStage = pipeline_stage || section;
+    let newStage = rawNewStage;
+    if (rawNewStage === 'Ready to Quote') newStage = 'READY_TO_QUOTE';
+    if (rawNewStage === 'Invoice') newStage = 'Invoiced';
     const schedDate = scheduled_date !== undefined ? scheduled_date : scheduledDate;
     const schedSlot = scheduled_time_slot !== undefined ? scheduled_time_slot : scheduledTimeSlot;
 
@@ -1211,12 +1281,30 @@ const updateJobStatus = async (req, res, next) => {
     }
 
     if (newStage === 'Jobs' && existingJob.pipeline_stage !== 'Jobs') {
-      await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
-        console.error('[updateJob] Error triggering auto booking request:', err.message);
-      });
+      const [existingBooking] = await pool.query(
+        'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
+        [id]
+      );
+      if (existingBooking.length === 0) {
+        await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+          console.error('[updateJob] Error triggering auto booking request:', err.message);
+        });
+      }
     }
 
     if (newStage === 'Completed Quotes' && existingJob.pipeline_stage !== 'Completed Quotes') {
+      const [existingBooking] = await pool.query(
+        'SELECT id, status FROM booking_requests WHERE work_order_id = ?',
+        [id]
+      );
+      if (existingBooking.length === 0 || existingBooking[0].status === 'EXPIRED') {
+        await BookingRequestService.triggerAutoBookingRequest(id).catch(err => {
+          console.error('[updateJobStatus] Error triggering auto booking request on Completed Quotes:', err.message);
+        });
+      } else {
+        console.log(`[updateJobStatus] Booking request already exists for work order #${id} (status: ${existingBooking[0].status}), skipping duplicate trigger.`);
+      }
+
       const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of admins) {
         await notificationService.createNotification({
