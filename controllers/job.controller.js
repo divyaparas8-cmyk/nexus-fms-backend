@@ -140,9 +140,7 @@ const getJobs = async (req, res, next) => {
     }
 
     // Role-based data isolation
-    if (req.user && req.user.role === 'OFFICE_TEAM') {
-      sql += " AND w.pipeline_stage IN ('Jobs', 'Jobs Waiting Booking')";
-    } else if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
+    if (req.user && req.user.role === 'MAINTENANCE_STAFF') {
       if (req.user.staffProfileId) {
         sql += ' AND (w.assigned_staff_id = ? OR (w.assigned_staff_ids IS NOT NULL AND JSON_CONTAINS(w.assigned_staff_ids, CAST(? AS JSON), "$")))';
         queryParams.push(req.user.staffProfileId, req.user.staffProfileId);
@@ -280,17 +278,6 @@ const getJobById = async (req, res, next) => {
         success: false,
         message: `Work order not found with identifier '${id}'`,
       });
-    }
-
-    // OFFICE_TEAM: can only access booking-relevant stages
-    if (req.user && req.user.role === 'OFFICE_TEAM') {
-      const allowedStages = ['Jobs', 'Jobs Waiting Booking'];
-      if (!allowedStages.includes(rows[0].pipeline_stage)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Forbidden. Office Team can only access booking-stage jobs.',
-        });
-      }
     }
 
     let completionPhotos = [];

@@ -37,8 +37,8 @@ router.get('/', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF', 'OFFICE_TEAM
 router.get('/:id', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF', 'OFFICE_TEAM'), getStaffById);
 
 // Write / Management Endpoints
-router.post('/', authorizeRoles('OFFICE_ADMIN'), photoUpload.single('avatar'), createStaff);
-router.put('/:id', authorizeRoles('OFFICE_ADMIN', 'MAINTENANCE_STAFF'), photoUpload.single('avatar'), updateStaff);
-router.delete('/:id', authorizeRoles('OFFICE_ADMIN'), deleteStaff);
+router.post('/', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), photoUpload.single('avatar'), createStaff);
+router.put('/:id', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM', 'MAINTENANCE_STAFF'), photoUpload.single('avatar'), updateStaff);
+router.delete('/:id', authorizeRoles('OFFICE_ADMIN', 'OFFICE_TEAM'), deleteStaff);
 
 module.exports = router;
