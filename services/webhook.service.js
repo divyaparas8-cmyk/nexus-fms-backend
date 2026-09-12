@@ -8,6 +8,8 @@ const getFrontendBaseUrl = () => {
   return url.replace(/\/$/, '');
 };
 
+const recentTaskAssignedEvents = new Map();
+
 const dispatchN8NWebhook = async (eventType, payload) => {
   const n8nWebhookUrl = process.env.N8N_WEBHOOK_URL;
 
@@ -16,6 +18,23 @@ const dispatchN8NWebhook = async (eventType, payload) => {
   if (eventType === 'TASK_ASSIGNED') {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+    const techRecipient = formattedPayload.technicianPhone || formattedPayload.technicianEmail || formattedPayload.contactPhone || formattedPayload.contactEmail || formattedPayload.to || formattedPayload.email || '';
+    const dedupKey = `${workOrderId}_${techRecipient}`;
+    const now = Date.now();
+
+    // 5-second in-memory deduplication to prevent double SMS/Emails to technician on job assignment
+    if (workOrderId && techRecipient && recentTaskAssignedEvents.has(dedupKey) && (now - recentTaskAssignedEvents.get(dedupKey) < 5000)) {
+      console.log(`[N8N_WEBHOOK] ⚡ Duplicate TASK_ASSIGNED webhook suppressed for ${dedupKey}`);
+      return { success: true, deduplicated: true };
+    }
+    if (workOrderId && techRecipient) {
+      recentTaskAssignedEvents.set(dedupKey, now);
+      if (recentTaskAssignedEvents.size > 500) {
+        for (const [k, t] of recentTaskAssignedEvents.entries()) {
+          if (now - t > 10000) recentTaskAssignedEvents.delete(k);
+        }
+      }
+    }
 
     // 1. Direct frontend URL where technician can open their task portal (Screenshot 2: /maintenance/my-tasks)
     formattedPayload.actionUrl = `${frontendBase}/maintenance/my-tasks${workOrderId ? `?jobId=${workOrderId}` : ''}`;
@@ -553,6 +572,86 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       formattedPayload.data.headline = formattedPayload.headline;
       formattedPayload.data.message = formattedPayload.message;
       formattedPayload.data.actionUrl = formattedPayload.actionUrl;
+    }
+  }
+
+  if (eventType === 'TENANT_REGISTRATION' || eventType === 'RESIDENT_REGISTRATION') {
+    const frontendBase = getFrontendBaseUrl();
+    const residentName = formattedPayload.residentName || formattedPayload.name || formattedPayload.full_name || 'Resident';
+    const residentPhone = formattedPayload.residentPhone || formattedPayload.phone || formattedPayload.contactPhone || null;
+    const residentEmail = formattedPayload.residentEmail || formattedPayload.email || formattedPayload.contactEmail || null;
+    const residentAddress = formattedPayload.residentAddress || formattedPayload.address || formattedPayload.propertyAddress || '';
+
+    formattedPayload.name = residentName;
+    formattedPayload.residentName = residentName;
+    formattedPayload.recipientName = residentName;
+    formattedPayload.phone = residentPhone;
+    formattedPayload.contactPhone = residentPhone;
+    formattedPayload.residentPhone = residentPhone;
+    formattedPayload.to = formattedPayload.to || residentPhone;
+    formattedPayload.email = residentEmail;
+    formattedPayload.contactEmail = residentEmail;
+    formattedPayload.residentEmail = residentEmail;
+    formattedPayload.address = residentAddress;
+    formattedPayload.propertyAddress = residentAddress;
+    formattedPayload.actionUrl = formattedPayload.actionUrl || frontendBase;
+    formattedPayload.subject = formattedPayload.subject || 'Welcome to Nexus FMS - Resident Registration Confirmation';
+    if (!formattedPayload.message) {
+      formattedPayload.message = `Hello ${residentName}, welcome to Nexus FMS! You have been registered for property maintenance services at ${residentAddress}. For any maintenance requests, contact us or visit ${frontendBase}. Nexus Facility Management.`;
+    }
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.name = residentName;
+      formattedPayload.data.residentName = residentName;
+      formattedPayload.data.recipientName = residentName;
+      formattedPayload.data.phone = residentPhone;
+      formattedPayload.data.email = residentEmail;
+      formattedPayload.data.address = residentAddress;
+      formattedPayload.data.subject = formattedPayload.subject;
+      formattedPayload.data.message = formattedPayload.message;
+      formattedPayload.data.actionUrl = formattedPayload.actionUrl;
+    }
+  }
+
+  if (eventType === 'STAFF_REGISTRATION' || eventType === 'TECHNICIAN_REGISTRATION') {
+    const frontendBase = getFrontendBaseUrl();
+    const staffName = formattedPayload.staffName || formattedPayload.technicianName || formattedPayload.name || 'Technician';
+    const staffPhone = formattedPayload.staffPhone || formattedPayload.technicianPhone || formattedPayload.phone || formattedPayload.contactPhone || null;
+    const staffEmail = formattedPayload.staffEmail || formattedPayload.technicianEmail || formattedPayload.email || formattedPayload.contactEmail || null;
+    const staffCode = formattedPayload.staffCode || formattedPayload.technicianCode || '';
+    const plainPassword = formattedPayload.password || formattedPayload.plainPassword || 'Password123!';
+    const portalUrl = `${frontendBase}/maintenance/my-tasks`;
+
+    formattedPayload.name = staffName;
+    formattedPayload.technicianName = staffName;
+    formattedPayload.recipientName = staffName;
+    formattedPayload.phone = staffPhone;
+    formattedPayload.contactPhone = staffPhone;
+    formattedPayload.technicianPhone = staffPhone;
+    formattedPayload.to = formattedPayload.to || staffPhone;
+    formattedPayload.email = staffEmail;
+    formattedPayload.contactEmail = staffEmail;
+    formattedPayload.technicianEmail = staffEmail;
+    formattedPayload.staffCode = staffCode;
+    formattedPayload.actionUrl = portalUrl;
+    formattedPayload.portalUrl = portalUrl;
+    formattedPayload.subject = formattedPayload.subject || 'Welcome to Nexus FMS - Technician Account Details';
+    if (!formattedPayload.message) {
+      formattedPayload.message = `Hello ${staffName}, welcome to Nexus FMS! Your technician account has been created.\nStaff ID: ${staffCode}\nPortal: ${portalUrl}\nEmail: ${staffEmail}\nPassword: ${plainPassword}\nPlease log in to view and manage your assigned tasks.`;
+    }
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.name = staffName;
+      formattedPayload.data.technicianName = staffName;
+      formattedPayload.data.recipientName = staffName;
+      formattedPayload.data.phone = staffPhone;
+      formattedPayload.data.email = staffEmail;
+      formattedPayload.data.staffCode = staffCode;
+      formattedPayload.data.password = plainPassword;
+      formattedPayload.data.portalUrl = portalUrl;
+      formattedPayload.data.actionUrl = portalUrl;
+      formattedPayload.data.subject = formattedPayload.subject;
+      formattedPayload.data.message = formattedPayload.message;
     }
   }
 

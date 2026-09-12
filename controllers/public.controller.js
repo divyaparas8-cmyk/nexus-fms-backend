@@ -582,7 +582,8 @@ const submitPublicBooking = async (req, res, next) => {
         contactPhone: techPhone,
         technicianName: techName,
         technicianPhone: techPhone,
-        propertyAddress: resAddress
+        propertyAddress: resAddress,
+        skipWebhook: true,
       }).catch(err => console.error('[Tech Booking Notification Dispatch Error]', err));
     }
 

@@ -2,6 +2,9 @@ const bcrypt = require('bcryptjs');
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
+const { sendSms } = require('../services/notification/providers/sms.provider');
+const { sendEmail } = require('../services/notification/providers/email.provider');
+const { dispatchN8NWebhook } = require('../services/webhook.service');
 
 // @desc    Get all staff members / technicians
 // @route   GET /api/v1/staff
@@ -305,7 +308,7 @@ const createStaff = async (req, res, next) => {
     await connection.commit();
     connection.release();
 
-    // Create Notification
+    // 1. Notify Admins in-app
     try {
       const [adminRows] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of adminRows) {
@@ -316,11 +319,78 @@ const createStaff = async (req, res, next) => {
           message: `Technician "${staffName}" has been added to the system.`,
           relatedEntityType: 'staff_profiles',
           relatedEntityId: profileId,
-          actionUrl: '/admin/staff'
+          actionUrl: '/admin/staff',
+          skipWebhook: true,
         });
       }
     } catch (notifErr) {
       console.error('[Notification] Failed to notify on staff creation:', notifErr);
+    }
+
+    // 2. Notify the newly registered Technician via SMS and Email with login credentials & direct portal link
+    try {
+      const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+      const portalUrl = `${frontendBase}/maintenance/my-tasks`;
+      const techSms = `Hello ${staffName}, welcome to Nexus FMS! Your technician account has been created.\nStaff ID: ${staffCode}\nPortal: ${portalUrl}\nEmail: ${staffEmail}\nPassword: ${plainPassword}\nPlease log in to view and manage your assigned tasks.`;
+      const techEmailSubject = 'Welcome to Nexus FMS - Technician Account Details';
+      const techEmailBody = `Hello ${staffName},\n\nYour Nexus FMS Maintenance Technician account has been created successfully!\n\nStaff ID: ${staffCode}\nDesignation: ${staffRoleTitle}\nPortal Link: ${portalUrl}\nEmail / Username: ${staffEmail}\nPassword: ${plainPassword}\n\nPlease log in to the Technician Portal to view and manage your assigned maintenance work orders.\n\nThank you,\nNexus FMS Operations Team`;
+
+      // Dispatch SMS directly via sms provider (forwards to N8N_SMS_WEBHOOK_URL)
+      if (staffPhone) {
+        sendSms({ to: staffPhone, message: techSms }).catch(err => {
+          console.warn('[StaffRegistration] SMS delivery warning:', err.message);
+        });
+      }
+
+      // Dispatch Email directly via email provider if email is provided
+      if (staffEmail) {
+        sendEmail({ to: staffEmail, subject: techEmailSubject, body: techEmailBody }).catch(err => {
+          console.warn('[StaffRegistration] Email delivery warning:', err.message);
+        });
+      }
+
+      // Create In-App Welcome Notification for the new technician user
+      await notificationService.createNotification({
+        recipientUserId: userId,
+        recipientRole: 'MAINTENANCE_STAFF',
+        type: 'WELCOME_STAFF',
+        title: 'Welcome to Nexus FMS',
+        message: `Welcome to the team, ${staffName}! Your technician portal is active.`,
+        relatedEntityType: 'staff_profiles',
+        relatedEntityId: profileId,
+        actionUrl: '/maintenance/my-tasks',
+        skipWebhook: true,
+      }).catch(err => console.warn('[StaffRegistration] In-app notification warning:', err.message));
+
+      // Dispatch N8N Webhook for STAFF_REGISTRATION event
+      dispatchN8NWebhook('STAFF_REGISTRATION', {
+        event: 'STAFF_REGISTRATION',
+        type: 'STAFF_REGISTRATION',
+        technicianId: profileId,
+        userId: userId,
+        staffCode: staffCode,
+        name: staffName,
+        technicianName: staffName,
+        recipientName: staffName,
+        phone: staffPhone,
+        contactPhone: staffPhone,
+        technicianPhone: staffPhone,
+        to: staffPhone,
+        email: staffEmail,
+        contactEmail: staffEmail,
+        technicianEmail: staffEmail,
+        password: plainPassword,
+        roleTitle: staffRoleTitle,
+        actionUrl: portalUrl,
+        portalUrl: portalUrl,
+        subject: techEmailSubject,
+        message: techSms,
+        emailBody: techEmailBody,
+      }).catch(err => {
+        console.warn('[StaffRegistration] N8N Webhook dispatch warning:', err.message);
+      });
+    } catch (techMsgErr) {
+      console.warn('[StaffRegistration] Notification dispatch error:', techMsgErr.message);
     }
 
     res.status(201).json({

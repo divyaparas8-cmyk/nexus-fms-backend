@@ -580,6 +580,7 @@ const createJob = async (req, res, next) => {
           contactEmail: staff.email,
           propertyAddress: resAddress,
           channels: ['IN_APP', 'SMS', 'EMAIL'],
+          skipWebhook: true,
         });
 
         dispatchN8NWebhook('TASK_ASSIGNED', {
@@ -1182,6 +1183,7 @@ const updateJobStatus = async (req, res, next) => {
             technicianPhone: staff.staff_phone || staff.user_phone,
             propertyAddress: existingJob.property_address,
             channels: ['IN_APP', 'SMS', 'EMAIL'],
+            skipWebhook: true,
           });
 
           const assignedPayload = {

@@ -503,6 +503,7 @@ const dispatchJob = async (req, res, next) => {
           contactEmail: staff.email,
           propertyAddress: updatedRows[0]?.live_property_address || updatedRows[0]?.property_address,
           channels: ['IN_APP', 'SMS', 'EMAIL'],
+          skipWebhook: true,
         });
 
         dispatchN8NWebhook('TASK_ASSIGNED', {

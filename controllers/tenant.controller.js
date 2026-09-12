@@ -1,6 +1,9 @@
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
+const { sendSms } = require('../services/notification/providers/sms.provider');
+const { sendEmail } = require('../services/notification/providers/email.provider');
+const { dispatchN8NWebhook } = require('../services/webhook.service');
 
 // @desc    Get all residents / tenants (supports optional search filter)
 // @route   GET /api/v1/tenants
@@ -116,7 +119,7 @@ const createTenant = async (req, res, next) => {
       [result.insertId]
     );
 
-    // Create Notification
+    // 1. Notify Admins in-app
     try {
       const [adminRows] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
       for (const admin of adminRows) {
@@ -127,11 +130,61 @@ const createTenant = async (req, res, next) => {
           message: `Resident "${residentName}" has been added to the directory.`,
           relatedEntityType: 'residents',
           relatedEntityId: result.insertId,
-          actionUrl: '/admin/tenants'
+          actionUrl: '/admin/tenants',
+          skipWebhook: true,
         });
       }
     } catch (notifErr) {
       console.error('[Notification] Failed to notify on tenant creation:', notifErr);
+    }
+
+    // 2. Send Registration Confirmation SMS & Email to the newly registered Resident
+    try {
+      const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+      const residentSmsText = `Hello ${residentName}, welcome to Nexus FMS! You have been registered for property maintenance services at ${residentAddress}. For any maintenance requests, contact us or visit ${frontendBase}. Nexus Facility Management.`;
+      const emailSubject = 'Welcome to Nexus FMS - Resident Registration Confirmation';
+      const emailBody = `Dear ${residentName},\n\nYou have been successfully registered in the Nexus FMS Resident Directory for property:\n${residentAddress}\n\nPhone: ${residentPhone}\n${residentEmail ? `Email: ${residentEmail}\n` : ''}\nWhenever a maintenance request is scheduled for your property, you will receive real-time updates and scheduling links directly via SMS and Email.\n\nThank you,\nNexus FMS Operations Team`;
+
+      // Dispatch SMS directly via sms provider (forwards to N8N_SMS_WEBHOOK_URL)
+      if (residentPhone) {
+        sendSms({ to: residentPhone, message: residentSmsText }).catch(err => {
+          console.warn('[TenantRegistration] SMS delivery warning:', err.message);
+        });
+      }
+
+      // Dispatch Email directly via email provider if email is provided
+      if (residentEmail) {
+        sendEmail({ to: residentEmail, subject: emailSubject, body: emailBody }).catch(err => {
+          console.warn('[TenantRegistration] Email delivery warning:', err.message);
+        });
+      }
+
+      // Dispatch N8N Webhook for TENANT_REGISTRATION event
+      dispatchN8NWebhook('TENANT_REGISTRATION', {
+        event: 'TENANT_REGISTRATION',
+        type: 'TENANT_REGISTRATION',
+        residentId: result.insertId,
+        name: residentName,
+        residentName: residentName,
+        recipientName: residentName,
+        phone: residentPhone,
+        residentPhone: residentPhone,
+        contactPhone: residentPhone,
+        to: residentPhone,
+        email: residentEmail,
+        residentEmail: residentEmail,
+        contactEmail: residentEmail,
+        address: residentAddress,
+        propertyAddress: residentAddress,
+        subject: emailSubject,
+        message: residentSmsText,
+        emailBody: emailBody,
+        actionUrl: frontendBase,
+      }).catch(err => {
+        console.warn('[TenantRegistration] N8N Webhook dispatch warning:', err.message);
+      });
+    } catch (msgErr) {
+      console.warn('[TenantRegistration] Notification dispatch error:', msgErr.message);
     }
 
     res.status(201).json({
