@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { autoAssignTechnician, isAutoAssignmentEnabled } = require('../services/autoAssignment.service');
-const { dispatchN8NWebhook } = require('../services/webhook.service');
+const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
 const QuoteRequestService = require('../services/quoteRequest.service');
 const BookingRequestService = require('../services/bookingRequest.service');
@@ -299,6 +299,31 @@ const submitPublicQuoteUpload = async (req, res, next) => {
 
     await connection.commit();
     connection.release();
+
+    // Asynchronously dispatch ADMIN_OFFICE_ALERT to n8n for Admin & Office Team email notification
+    const frontendBaseUrl = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
+    getAdminAndOfficeRecipientEmail(pool)
+      .then((recipientEmail) => {
+        return dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+          alertType: 'QUOTE_PHOTOS_UPLOADED',
+          recipientEmail,
+          workOrderId,
+          jobNumber: wo.job_number || `WO-${workOrderId.substring(0, 6)}`,
+          jobTitle,
+          propertyAddress: resAddress,
+          residentName: resName,
+          residentPhone: wo.contact_phone || wo.resident_phone,
+          photoCount: savedMediaList.length,
+          photoUrls: savedMediaList.map(m => m.url || m.file_path).filter(Boolean),
+          subject: `[Nexus FMS] Quote Photos Submitted: #${wo.job_number || workOrderId} - ${jobTitle}`,
+          headline: 'New Quote Photos Uploaded',
+          message: `Resident ${resName} has uploaded ${savedMediaList.length} photo(s) for quote estimation. Work order #${wo.job_number || workOrderId} is now Ready to Quote.`,
+          actionUrl: `${frontendBaseUrl}/admin/pipeline?stage=READY_TO_QUOTE`,
+        });
+      })
+      .catch((err) => {
+        console.warn('[N8N_WEBHOOK] Failed to dispatch QUOTE_PHOTOS_UPLOADED admin alert:', err.message);
+      });
 
     res.status(200).json({
       success: true,
@@ -680,6 +705,32 @@ const submitPublicBooking = async (req, res, next) => {
     dispatchN8NWebhook('TASK_ASSIGNED', taskAssignedPayload).catch(err => {
       console.warn('[N8N_DISPATCH_WARN] Failed to dispatch TASK_ASSIGNED webhook:', err.message);
     });
+
+    // 6. Asynchronously dispatch ADMIN_OFFICE_ALERT to n8n for Admin and Office Team email notifications
+    getAdminAndOfficeRecipientEmail(pool)
+      .then((recipientEmail) => {
+        return dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+          alertType: 'BOOKING_CONFIRMED',
+          recipientEmail,
+          workOrderId,
+          jobNumber: jobNum || `WO-${workOrderId.substring(0, 6)}`,
+          jobTitle,
+          propertyAddress: resAddress,
+          residentName: resName,
+          residentPhone: woRows[0]?.contact_phone,
+          technicianName: techName,
+          technicianPhone: techPhone,
+          scheduledDate: dateVal,
+          scheduledTimeSlot: slotVal,
+          subject: `[Nexus FMS] Appointment Confirmed: #${jobNum || workOrderId} - ${dateVal} (${slotVal})`,
+          headline: 'Maintenance Appointment Confirmed',
+          message: `Resident ${resName} has confirmed the appointment for ${dateVal} during ${slotVal} with technician ${techName}.`,
+          actionUrl: `${frontendBase}/admin/calendar`,
+        });
+      })
+      .catch((err) => {
+        console.warn('[N8N_WEBHOOK] Failed to dispatch BOOKING_CONFIRMED admin alert:', err.message);
+      });
 
     res.status(200).json({
       success: true,

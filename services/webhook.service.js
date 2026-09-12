@@ -513,6 +513,53 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'ADMIN_OFFICE_ALERT') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+
+    if (workOrderId && !formattedPayload.actionUrl) {
+      if (formattedPayload.alertType === 'QUOTE_PHOTOS_UPLOADED') {
+        formattedPayload.actionUrl = `${frontendBase}/admin/pipeline?stage=READY_TO_QUOTE`;
+      } else if (formattedPayload.alertType === 'BOOKING_CONFIRMED') {
+        formattedPayload.actionUrl = `${frontendBase}/admin/calendar`;
+      } else if (formattedPayload.alertType === 'JOB_COMPLETED') {
+        formattedPayload.actionUrl = `${frontendBase}/jobs/${workOrderId}/report`;
+      } else {
+        formattedPayload.actionUrl = `${frontendBase}/admin/pipeline`;
+      }
+    }
+
+    // Ensure recipientEmail is formatted as a single clean comma-separated string (no array)
+    let recipientStr = formattedPayload.recipientEmail || '';
+    if (Array.isArray(recipientStr)) {
+      recipientStr = recipientStr.join(', ');
+    }
+    if (!recipientStr || recipientStr.trim() === '') {
+      recipientStr = 'admin@nexusfms.com';
+    }
+    formattedPayload.recipientEmail = recipientStr;
+
+    // Fallback standard keys for email nodes that accept 'to' or 'email'
+    formattedPayload.to = recipientStr;
+    formattedPayload.email = recipientStr;
+
+    // Ensure subject and headline are always populated
+    formattedPayload.subject = formattedPayload.subject || `[Nexus FMS] Alert: ${formattedPayload.alertType || 'Operational Update'}`;
+    formattedPayload.headline = formattedPayload.headline || formattedPayload.title || 'Operational Notification';
+    formattedPayload.message = formattedPayload.message || formattedPayload.description || '';
+
+    if (formattedPayload.data && typeof formattedPayload.data === 'object') {
+      formattedPayload.data.alertType = formattedPayload.alertType;
+      formattedPayload.data.recipientEmail = formattedPayload.recipientEmail;
+      formattedPayload.data.to = formattedPayload.to;
+      formattedPayload.data.email = formattedPayload.email;
+      formattedPayload.data.subject = formattedPayload.subject;
+      formattedPayload.data.headline = formattedPayload.headline;
+      formattedPayload.data.message = formattedPayload.message;
+      formattedPayload.data.actionUrl = formattedPayload.actionUrl;
+    }
+  }
+
   const eventData = {
     event: eventType,
     timestamp: new Date().toISOString(),
@@ -552,6 +599,35 @@ const dispatchN8NWebhook = async (eventType, payload) => {
   }
 };
 
+/**
+ * Resolves the single active Admin email and single active Office Team email.
+ * Formats as a clean comma-separated string: "admin@email.com, office@email.com"
+ * If none found, gracefully falls back to system supportEmail or admin@nexusfms.com.
+ */
+const getAdminAndOfficeRecipientEmail = async (dbPoolOrConnection) => {
+  try {
+    const db = dbPoolOrConnection || require('../config/db').pool;
+    const [adminRows] = await db.query(
+      "SELECT email FROM users WHERE role IN ('OFFICE_ADMIN', 'ADMIN') AND is_active = 1 LIMIT 1"
+    );
+    const [officeRows] = await db.query(
+      "SELECT email FROM users WHERE role = 'OFFICE_TEAM' AND is_active = 1 LIMIT 1"
+    );
+
+    const adminEmail = adminRows[0]?.email;
+    const officeEmail = officeRows[0]?.email;
+
+    const recipients = [adminEmail, officeEmail].filter(Boolean);
+    if (recipients.length > 0) {
+      return recipients.join(', ');
+    }
+  } catch (err) {
+    console.warn('[N8N_WEBHOOK] Could not resolve admin/office recipient emails from DB:', err.message);
+  }
+  return 'admin@nexusfms.com';
+};
+
 module.exports = {
   dispatchN8NWebhook,
+  getAdminAndOfficeRecipientEmail,
 };

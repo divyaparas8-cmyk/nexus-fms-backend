@@ -4,7 +4,7 @@ const notificationService = require('../services/notification.service');
 const QuoteRequestService = require('../services/quoteRequest.service');
 const BookingRequestService = require('../services/bookingRequest.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
-const { dispatchN8NWebhook } = require('../services/webhook.service');
+const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
 
 
 // Helper to format any date input to strict YYYY-MM-DD
@@ -51,8 +51,8 @@ const formatJobRow = (r, role) => {
     assignedStaffColor: r.staff_color || '#009bf2',
     managerName: r.manager_name || null,
     quoteAmount: r.quote_amount ? parseFloat(r.quote_amount) : null,
-    scheduledDate: formatDateToISO(r.scheduled_date),
-    scheduledTimeSlot: r.scheduled_time_slot || null,
+    scheduledDate: formatDateToISO(r.scheduled_date || r.booked_date || r.appointment_date),
+    scheduledTimeSlot: r.scheduled_time_slot || r.booked_time_slot || r.time_slot || null,
     secureToken: r.secure_token,
     createdAt: formatDateToISO(r.created_at),
     bookingStatus: r.booking_status || null,
@@ -109,6 +109,10 @@ const getJobs = async (req, res, next) => {
     let sql = `
       SELECT 
         w.*,
+        COALESCE(w.scheduled_date, b.booked_date) as scheduled_date,
+        COALESCE(w.scheduled_time_slot, b.booked_time_slot) as scheduled_time_slot,
+        b.booked_date,
+        b.booked_time_slot,
         (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
@@ -256,6 +260,10 @@ const getJobById = async (req, res, next) => {
     const [rows] = await pool.query(
       `SELECT 
         w.*,
+        COALESCE(w.scheduled_date, b.booked_date) as scheduled_date,
+        COALESCE(w.scheduled_time_slot, b.booked_time_slot) as scheduled_time_slot,
+        b.booked_date,
+        b.booked_time_slot,
         (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
         r.full_name as live_resident_name,
         r.phone as live_contact_phone,
@@ -263,11 +271,13 @@ const getJobById = async (req, res, next) => {
         r.address as live_property_address,
         u.full_name as staff_name,
         sp.color_hex as staff_color,
+        b.status as booking_status,
         u_cancel.full_name as canceller_name
       FROM work_orders w
       LEFT JOIN residents r ON w.resident_id = r.id
       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
       LEFT JOIN users u ON sp.user_id = u.id
+      LEFT JOIN booking_requests b ON w.id = b.work_order_id
       LEFT JOIN users u_cancel ON w.cancelled_by = u_cancel.id
       WHERE w.id = ? OR w.job_number = ? OR w.secure_token = ?`,
       [id, id, id]
@@ -853,6 +863,29 @@ const moveJobStage = async (req, res, next) => {
           reportUrl: completionReportUrl,
           pdfReportUrl: completionReportUrl
         }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
+
+        // Asynchronously dispatch ADMIN_OFFICE_ALERT to n8n for Admin and Office Team email notifications
+        getAdminAndOfficeRecipientEmail(pool)
+          .then((recipientEmail) => {
+            return dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+              alertType: 'JOB_COMPLETED',
+              recipientEmail,
+              workOrderId: parseInt(id, 10),
+              jobNumber: jNum,
+              jobTitle: row?.title,
+              propertyAddress: pAddress,
+              technicianName: techStaffName,
+              residentName: tName,
+              residentPhone: tPhone,
+              actionUrl: completionReportUrl,
+              subject: `[Nexus FMS] Job Completed: #${jNum || id} by ${techStaffName}`,
+              headline: 'Work Order Completed by Technician',
+              message: `Technician ${techStaffName} has completed work order #${jNum || id} ("${row?.title}") at ${pAddress}.`,
+            });
+          })
+          .catch((err) => {
+            console.warn('[N8N_WEBHOOK] Failed to dispatch JOB_COMPLETED admin alert:', err.message);
+          });
       } catch (e) {
         console.warn('[moveJobStage] Error dispatching completed job events:', e.message);
       }

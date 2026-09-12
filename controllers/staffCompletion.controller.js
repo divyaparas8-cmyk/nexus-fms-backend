@@ -1,7 +1,7 @@
 const { pool } = require('../config/db');
 const notificationService = require('../services/notification.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
-const { dispatchN8NWebhook } = require('../services/webhook.service');
+const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
 
 
 // Helper to resolve staff profile ID from logged in user ID
@@ -686,6 +686,30 @@ const markJobComplete = async (req, res, next) => {
       pdfReportUrl: completionReportUrl
     }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
 
+    // 5. Asynchronously dispatch ADMIN_OFFICE_ALERT to n8n for Admin and Office Team email notifications
+    getAdminAndOfficeRecipientEmail(pool)
+      .then((recipientEmail) => {
+        return dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+          alertType: 'JOB_COMPLETED',
+          recipientEmail,
+          workOrderId: parseInt(id, 10),
+          jobNumber,
+          jobTitle,
+          propertyAddress: propAddress,
+          technicianName: finalTechName,
+          residentName: tenantName,
+          residentPhone: tenantPhone,
+          completionNotes: reportSummary || '',
+          actionUrl: completionReportUrl,
+          subject: `[Nexus FMS] Job Completed: #${jobNumber || id} by ${finalTechName}`,
+          headline: 'Work Order Completed by Technician',
+          message: `Technician ${finalTechName} has completed work order #${jobNumber || id} ("${jobTitle}") at ${propAddress}.`,
+        });
+      })
+      .catch((err) => {
+        console.warn('[N8N_WEBHOOK] Failed to dispatch JOB_COMPLETED admin alert:', err.message);
+      });
+
     res.status(200).json({
       success: true,
       message: "Work order marked as 'Completed Jobs' successfully.",
@@ -1114,6 +1138,30 @@ const completeJobAtomic = async (req, res, next) => {
         reportUrl: completionReportUrl,
         pdfReportUrl: completionReportUrl
       }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch JOB_COMPLETED webhook:', err.message));
+
+      // 5. Asynchronously dispatch ADMIN_OFFICE_ALERT to n8n for Admin and Office Team email notifications
+      getAdminAndOfficeRecipientEmail(pool)
+        .then((recipientEmail) => {
+          return dispatchN8NWebhook('ADMIN_OFFICE_ALERT', {
+            alertType: 'JOB_COMPLETED',
+            recipientEmail,
+            workOrderId: parseInt(id, 10),
+            jobNumber,
+            jobTitle: job.title,
+            propertyAddress,
+            technicianName: techName,
+            residentName: tenantName,
+            residentPhone: tenantPhone,
+            completionNotes: completion_report ? completion_report.trim() : '',
+            actionUrl: completionReportUrl,
+            subject: `[Nexus FMS] Job Completed: #${jobNumber || id} by ${techName}`,
+            headline: 'Work Order Completed by Technician',
+            message: `Technician ${techName} has completed work order #${jobNumber || id} ("${job.title}") at ${propertyAddress}.`,
+          });
+        })
+        .catch((err) => {
+          console.warn('[N8N_WEBHOOK] Failed to dispatch JOB_COMPLETED admin alert:', err.message);
+        });
 
     } catch(err) {
       console.error('[JOB_COMPLETION_NOTIFICATIONS_ERROR]', err);
