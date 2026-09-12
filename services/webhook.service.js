@@ -17,12 +17,8 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
 
-    // 1. Direct frontend URL where technician can open the assigned job details
-    if (workOrderId) {
-      formattedPayload.actionUrl = `${frontendBase}/jobs/${workOrderId}`;
-    } else if (!formattedPayload.actionUrl || !formattedPayload.actionUrl.startsWith('http')) {
-      formattedPayload.actionUrl = `${frontendBase}/maintenance/my-tasks`;
-    }
+    // 1. Direct frontend URL where technician can open their task portal (Screenshot 2: /maintenance/my-tasks)
+    formattedPayload.actionUrl = `${frontendBase}/maintenance/my-tasks${workOrderId ? `?jobId=${workOrderId}` : ''}`;
 
     // 2. Ensure entityId and workOrderId
     if (workOrderId) {

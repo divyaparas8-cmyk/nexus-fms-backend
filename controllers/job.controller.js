@@ -562,8 +562,8 @@ const createJob = async (req, res, next) => {
       if (spUser.length > 0) {
         const staff = spUser[0];
         const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
-        const directJobActionUrl = `${frontendBase}/jobs/${result.insertId}`;
-        const newAssignMsg = `You have been assigned to Job #${jobNumber}: ${jobTitle} at ${resAddress}. View task: ${directJobActionUrl}`;
+        const directJobActionUrl = `${frontendBase}/maintenance/my-tasks?jobId=${result.insertId}`;
+        const newAssignMsg = `You have been assigned to Job #${jobNumber}: ${jobTitle} at ${resAddress}. Open task portal: ${directJobActionUrl}`;
 
         await notificationService.createNotification({
           recipientUserId: staff.user_id,
@@ -1091,7 +1091,7 @@ const updateJobStatus = async (req, res, next) => {
 
     const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
     const jobNum = existingJob.job_number || `JOB-${id}`;
-    const directJobActionUrl = `${frontendBase}/jobs/${id}`;
+    const directJobActionUrl = `${frontendBase}/maintenance/my-tasks?jobId=${id}`;
     const targetSchedDate = schedDate !== undefined ? (schedDate === null ? null : String(schedDate).substring(0, 10)) : prevSchedDate;
     const targetSchedSlot = schedSlot !== undefined ? (schedSlot === null ? null : schedSlot) : prevSchedSlot;
 

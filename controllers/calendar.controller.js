@@ -417,7 +417,7 @@ const dispatchJob = async (req, res, next) => {
 
     const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
     const jobNum = updatedRows[0]?.job_number || `JOB-${targetJobId}`;
-    const directJobActionUrl = `${frontendBase}/jobs/${targetJobId}`;
+    const directJobActionUrl = `${frontendBase}/maintenance/my-tasks?jobId=${targetJobId}`;
 
     // 1. If reassigned from a different staff, notify previous staff
     if (job.assigned_staff_id && job.assigned_staff_id !== finalStaffId) {

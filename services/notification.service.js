@@ -201,9 +201,7 @@ const notificationService = {
           const workOrderId = relatedEntityId || n8nPayload.entityId;
           n8nPayload.workOrderId = workOrderId;
           n8nPayload.entityId = workOrderId;
-          n8nPayload.actionUrl = (type === 'TASK_ASSIGNED')
-            ? (workOrderId ? `${frontendBase}/jobs/${workOrderId}` : (actionUrl || `${frontendBase}/maintenance/my-tasks`))
-            : (actionUrl || `${frontendBase}/maintenance/my-tasks`);
+          n8nPayload.actionUrl = `${frontendBase}/maintenance/my-tasks${workOrderId ? `?jobId=${workOrderId}` : ''}`;
 
           // Fetch technician details if missing
           if (recipientUserId && (!n8nPayload.technicianName || !n8nPayload.technicianPhone)) {
@@ -485,13 +483,16 @@ const notificationService = {
                 n8nPayload.technicianEmail = n8nPayload.technicianEmail || r.tech_email;
 
                 if (recipientRole === 'MAINTENANCE_STAFF') {
-                  // CRUCIAL: Staff recipient must be greeted with staff name (e.g. lightlab)
+                  // CRUCIAL: Staff recipient must be greeted with staff name and routed to staff portal
                   const staffDisplayName = n8nPayload.technicianName || r.tech_name || 'Technician';
                   n8nPayload.name = staffDisplayName;
                   n8nPayload.recipientName = staffDisplayName;
                   n8nPayload.staffName = staffDisplayName;
                   n8nPayload.residentName = staffDisplayName; // Overrides residentName so N8N greeting says 'Dear lightlab'
                   n8nPayload.tenantName = r.live_res_name || r.resident_name;
+                  n8nPayload.actionUrl = `${frontendBase}/maintenance/my-tasks`;
+                  n8nPayload.reportUrl = `${frontendBase}/maintenance/my-tasks`;
+                  n8nPayload.pdfReportUrl = `${frontendBase}/maintenance/my-tasks`;
                 } else if (recipientRole === 'OFFICE_ADMIN' || recipientRole === 'OFFICE_TEAM') {
                   n8nPayload.name = 'Admin';
                   n8nPayload.recipientName = 'Admin';

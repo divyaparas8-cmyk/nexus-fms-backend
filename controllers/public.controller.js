@@ -533,7 +533,7 @@ const submitPublicBooking = async (req, res, next) => {
     const photoUrls = customerMediaRows.map(m => m.file_path);
 
     const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
-    const directJobActionUrl = `${frontendBase}/jobs/${workOrderId}`;
+    const directJobActionUrl = `${frontendBase}/maintenance/my-tasks?jobId=${workOrderId}`;
 
     // 1. Notify Admins (Internal in-app notification only; skip external N8N webhook so tenant doesn't get duplicate empty SMS)
     const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
