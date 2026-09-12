@@ -3,6 +3,8 @@
  * Dispatches event payloads to N8N.cloud workflows
  */
 
+const { normalizePhoneNumber } = require('../utils/phoneNormalizer');
+
 const getFrontendBaseUrl = () => {
   const url = process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app';
   return url.replace(/\/$/, '');
@@ -652,6 +654,17 @@ const dispatchN8NWebhook = async (eventType, payload) => {
       formattedPayload.data.actionUrl = portalUrl;
       formattedPayload.data.subject = formattedPayload.subject;
       formattedPayload.data.message = formattedPayload.message;
+    }
+  }
+
+  // Auto-normalize all phone number fields to international E.164 format (+91 / +44)
+  const phoneFields = ['to', 'phone', 'contactPhone', 'technicianPhone', 'residentPhone', 'tenantPhone'];
+  for (const f of phoneFields) {
+    if (formattedPayload[f]) {
+      formattedPayload[f] = normalizePhoneNumber(formattedPayload[f]);
+    }
+    if (formattedPayload.data && formattedPayload.data[f]) {
+      formattedPayload.data[f] = normalizePhoneNumber(formattedPayload.data[f]);
     }
   }
 

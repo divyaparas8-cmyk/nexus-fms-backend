@@ -5,6 +5,7 @@ const { uploadMediaFile } = require('../services/cloudinary.service');
 const { sendSms } = require('../services/notification/providers/sms.provider');
 const { sendEmail } = require('../services/notification/providers/email.provider');
 const { dispatchN8NWebhook } = require('../services/webhook.service');
+const { normalizePhoneNumber } = require('../utils/phoneNormalizer');
 
 // @desc    Get all staff members / technicians
 // @route   GET /api/v1/staff
@@ -238,7 +239,8 @@ const createStaff = async (req, res, next) => {
     const { full_name, name, email, phone, role, role_title, color, workingDays, startTime, endTime, password } = req.body;
 
     const staffName = (full_name || name || '').trim();
-    const staffPhone = (phone || '').trim();
+    const rawPhone = (phone || '').trim();
+    const staffPhone = normalizePhoneNumber(rawPhone);
     const staffRoleTitle = (role_title || role || 'Maintenance Technician').trim();
 
     if (!staffName) {
@@ -473,7 +475,8 @@ const updateStaff = async (req, res, next) => {
     const profileId = existing[0].profile_id;
     const userId = existing[0].user_id;
     const staffName = (full_name || name || '').trim();
-    const staffPhone = (phone || '').trim();
+    const rawPhone = (phone || '').trim();
+    const staffPhone = rawPhone ? normalizePhoneNumber(rawPhone) : '';
     const staffEmail = (email || '').trim().toLowerCase();
 
     // Prevent duplicate email constraint crash if updated email belongs to someone else

@@ -6,7 +6,10 @@
  * 3. Development Mock Simulator (Zero external dependencies)
  */
 
+const { normalizePhoneNumber } = require('../../../utils/phoneNormalizer');
+
 const sendSms = async ({ to, message }) => {
+  const normalizedTo = normalizePhoneNumber(to);
   const twilioSid = process.env.TWILIO_ACCOUNT_SID;
   const twilioAuthToken = process.env.TWILIO_AUTH_TOKEN;
   const twilioFromPhone = process.env.TWILIO_PHONE_NUMBER;
@@ -15,12 +18,12 @@ const sendSms = async ({ to, message }) => {
   // ── Mode 1: Live Twilio Integration ────────────────────────────────────────
   if (twilioSid && twilioAuthToken && twilioFromPhone) {
     try {
-      console.log(`[TWILIO_SMS] 📱 Dispatching live SMS to ${to}...`);
+      console.log(`[TWILIO_SMS] 📱 Dispatching live SMS to ${normalizedTo}...`);
       const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`;
       
       const authHeader = 'Basic ' + Buffer.from(`${twilioSid}:${twilioAuthToken}`).toString('base64');
       const params = new URLSearchParams();
-      params.append('To', to);
+      params.append('To', normalizedTo);
       params.append('From', twilioFromPhone);
       params.append('Body', message);
 
@@ -57,7 +60,7 @@ const sendSms = async ({ to, message }) => {
       const response = await fetch(n8nSmsWebhookUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to, message, timestamp: new Date().toISOString() }),
+        body: JSON.stringify({ to: normalizedTo, message, timestamp: new Date().toISOString() }),
       });
       const data = await response.json().catch(() => ({}));
       return {
@@ -73,7 +76,7 @@ const sendSms = async ({ to, message }) => {
   }
 
   // ── Mode 3: Development Simulator ──────────────────────────────────────────
-  console.log(`[SMS_DEV_SIMULATOR] 📱 Simulated SMS to ${to}`);
+  console.log(`[SMS_DEV_SIMULATOR] 📱 Simulated SMS to ${normalizedTo}`);
   console.log(`[SMS_DEV_SIMULATOR] Content: ${message}`);
   
   await new Promise(resolve => setTimeout(resolve, 300));

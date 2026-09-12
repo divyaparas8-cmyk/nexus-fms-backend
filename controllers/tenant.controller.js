@@ -4,6 +4,7 @@ const { uploadMediaFile } = require('../services/cloudinary.service');
 const { sendSms } = require('../services/notification/providers/sms.provider');
 const { sendEmail } = require('../services/notification/providers/email.provider');
 const { dispatchN8NWebhook } = require('../services/webhook.service');
+const { normalizePhoneNumber } = require('../utils/phoneNormalizer');
 
 // @desc    Get all residents / tenants (supports optional search filter)
 // @route   GET /api/v1/tenants
@@ -70,7 +71,8 @@ const createTenant = async (req, res, next) => {
     
     // Support both full_name and name keys from frontend
     const residentName = (full_name || name || '').trim();
-    const residentPhone = (phone || '').trim();
+    const rawPhone = (phone || '').trim();
+    const residentPhone = normalizePhoneNumber(rawPhone);
     const residentAddress = (address || '').trim();
     const residentEmail = email && email.trim() !== '' ? email.trim() : null;
     const residentNotes = notes && notes.trim() !== '' ? notes.trim() : null;
@@ -214,7 +216,8 @@ const updateTenant = async (req, res, next) => {
     }
 
     const residentName = (full_name || name || '').trim();
-    const residentPhone = (phone || '').trim();
+    const rawPhone = (phone || '').trim();
+    const residentPhone = normalizePhoneNumber(rawPhone);
     const residentAddress = (address || '').trim();
     const residentEmail = email && email.trim() !== '' ? email.trim() : null;
     const residentNotes = notes && notes.trim() !== '' ? notes.trim() : null;
