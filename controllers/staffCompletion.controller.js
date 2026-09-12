@@ -880,6 +880,35 @@ const completeJobAtomic = async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Validation Error: At least one after-photo is required to complete the job.' });
     }
 
+    // Process & Upload Media Files first (outside DB transaction to prevent holding DB locks during slow network uploads)
+    const uploadedMediaList = [];
+    if (req.files) {
+      const categories = ['beforePhotos', 'afterPhotos', 'receipts'];
+      for (const cat of categories) {
+        if (req.files[cat]) {
+          const type = cat === 'beforePhotos' ? 'BEFORE' : cat === 'afterPhotos' ? 'AFTER' : cat === 'receipts' ? 'RECEIPT' : 'OTHER';
+          for (const file of req.files[cat]) {
+            try {
+              const uploadRes = await uploadMediaFile(file, 'completion');
+              const fileUrl = uploadRes?.url || `/uploads/${file.filename}`;
+              uploadedMediaList.push({
+                file,
+                fileUrl,
+                type,
+              });
+            } catch (mediaErr) {
+              console.warn('[StaffCompletion] Media upload warning, falling back to local file:', mediaErr.message);
+              uploadedMediaList.push({
+                file,
+                fileUrl: `/uploads/${file.filename}`,
+                type,
+              });
+            }
+          }
+        }
+      }
+    }
+
     await connection.beginTransaction();
 
     const [jobRows] = await connection.query(
@@ -930,22 +959,12 @@ const completeJobAtomic = async (req, res, next) => {
       completionId = insertRes.insertId;
     }
 
-    // Process Media Uploads
-    if (req.files) {
-      const categories = ['beforePhotos', 'afterPhotos', 'receipts'];
-      for (const cat of categories) {
-        if (req.files[cat]) {
-          const type = cat === 'beforePhotos' ? 'BEFORE' : cat === 'afterPhotos' ? 'AFTER' : cat === 'receipts' ? 'RECEIPT' : 'OTHER';
-          for (const file of req.files[cat]) {
-            const uploadRes = await uploadMediaFile(file, 'completion');
-            const fileUrl = uploadRes?.url || `/uploads/${file.filename}`;
-            await connection.query(
-              "INSERT INTO staff_completion_media (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              [completionId, id, file.originalname, fileUrl, file.size, file.mimetype, type]
-            );
-          }
-        }
-      }
+    // Insert pre-uploaded media records instantly
+    for (const item of uploadedMediaList) {
+      await connection.query(
+        "INSERT INTO staff_completion_media (completion_id, work_order_id, file_name, file_path, file_size_bytes, mime_type, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [completionId, id, item.file.originalname, item.fileUrl, item.file.size, item.file.mimetype, item.type]
+      );
     }
 
     // Insert Materials + deduct linked inventory stock

@@ -209,6 +209,133 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     }
   }
 
+  if (eventType === 'TASK_SCHEDULE_CHANGED') {
+    const frontendBase = getFrontendBaseUrl();
+    const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
+    const techRecipient = formattedPayload.technicianPhone || formattedPayload.technicianEmail || formattedPayload.contactPhone || formattedPayload.contactEmail || formattedPayload.to || formattedPayload.email || '';
+    const dedupKey = `SCHED_${workOrderId}_${techRecipient}`;
+    const now = Date.now();
+
+    // 5-second in-memory deduplication to prevent double SMS/Emails to technician on schedule update
+    if (workOrderId && techRecipient && recentTaskAssignedEvents.has(dedupKey) && (now - recentTaskAssignedEvents.get(dedupKey) < 5000)) {
+      console.log(`[N8N_WEBHOOK] ⚡ Duplicate TASK_SCHEDULE_CHANGED webhook suppressed for ${dedupKey}`);
+      return { success: true, deduplicated: true };
+    }
+    if (workOrderId && techRecipient) {
+      recentTaskAssignedEvents.set(dedupKey, now);
+      if (recentTaskAssignedEvents.size > 500) {
+        for (const [k, t] of recentTaskAssignedEvents.entries()) {
+          if (now - t > 10000) recentTaskAssignedEvents.delete(k);
+        }
+      }
+    }
+
+    formattedPayload.actionUrl = `${frontendBase}/maintenance/my-tasks${workOrderId ? `?jobId=${workOrderId}` : ''}`;
+
+    if (workOrderId) {
+      formattedPayload.entityId = formattedPayload.entityId || workOrderId;
+      formattedPayload.workOrderId = formattedPayload.workOrderId || workOrderId;
+    }
+
+    formattedPayload.technicianName = formattedPayload.technicianName || formattedPayload.technician?.name || null;
+    formattedPayload.technicianPhone = formattedPayload.technicianPhone || formattedPayload.technician?.phone || formattedPayload.contactPhone || null;
+    formattedPayload.propertyAddress = formattedPayload.propertyAddress || formattedPayload.address || null;
+    formattedPayload.title = formattedPayload.title || 'Job Schedule Updated';
+
+    let schedDate = formattedPayload.scheduledDate || formattedPayload.scheduled_date || formattedPayload.date || formattedPayload.data?.scheduledDate || formattedPayload.data?.scheduled_date || formattedPayload.data?.date || null;
+    let schedTime = formattedPayload.scheduledTime || formattedPayload.scheduledTimeSlot || formattedPayload.scheduled_time || formattedPayload.scheduled_time_slot || formattedPayload.time || formattedPayload.timeSlot || formattedPayload.data?.scheduledTime || formattedPayload.data?.scheduled_time || formattedPayload.data?.scheduledTimeSlot || formattedPayload.data?.scheduled_time_slot || formattedPayload.data?.time || formattedPayload.data?.timeSlot || null;
+
+    if ((!schedDate || !schedTime || !formattedPayload.propertyAddress || !formattedPayload.technicianName) && workOrderId) {
+      try {
+        const { pool } = require('../config/db');
+        const [woRows] = await pool.query(
+          `SELECT w.scheduled_date, w.scheduled_time_slot, w.property_address, w.title, w.job_number, w.assigned_staff_id,
+                  u.full_name as staff_name, u.phone as staff_phone, u.email as staff_email
+           FROM work_orders w
+           LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
+           LEFT JOIN users u ON sp.user_id = u.id
+           WHERE w.id = ?`,
+          [workOrderId]
+        );
+        if (woRows.length > 0) {
+          const r = woRows[0];
+          if (!schedDate && r.scheduled_date) {
+            const raw = r.scheduled_date;
+            schedDate = raw instanceof Date ? raw.toISOString().substring(0, 10) : String(raw).substring(0, 10);
+          }
+          if (!schedTime && r.scheduled_time_slot) {
+            schedTime = r.scheduled_time_slot;
+          }
+          if (!formattedPayload.propertyAddress && r.property_address) {
+            formattedPayload.propertyAddress = r.property_address;
+          }
+          if (!formattedPayload.jobNumber && r.job_number) {
+            formattedPayload.jobNumber = r.job_number;
+          }
+          if (!formattedPayload.technicianName && r.staff_name) {
+            formattedPayload.technicianName = r.staff_name;
+          }
+          if (!formattedPayload.technicianPhone && r.staff_phone) {
+            formattedPayload.technicianPhone = r.staff_phone;
+          }
+          if (!formattedPayload.technicianEmail && r.staff_email) {
+            formattedPayload.technicianEmail = r.staff_email;
+          }
+        }
+      } catch (e) {
+        console.warn('[N8N_WEBHOOK] Could not fetch work_order schedule info for TASK_SCHEDULE_CHANGED:', e.message);
+      }
+    }
+
+    // Set all date and time synonyms on both top-level and data object
+    formattedPayload.scheduledDate = schedDate;
+    formattedPayload.scheduled_date = schedDate;
+    formattedPayload.date = schedDate;
+    formattedPayload.scheduledTime = schedTime;
+    formattedPayload.scheduled_time = schedTime;
+    formattedPayload.scheduledTimeSlot = schedTime;
+    formattedPayload.scheduled_time_slot = schedTime;
+    formattedPayload.time = schedTime;
+    formattedPayload.timeSlot = schedTime;
+
+    // Contact and recipient details
+    formattedPayload.contactPhone = formattedPayload.contactPhone || formattedPayload.technicianPhone || formattedPayload.technician?.phone || null;
+    formattedPayload.contactEmail = formattedPayload.contactEmail || formattedPayload.technicianEmail || formattedPayload.technician?.email || null;
+    formattedPayload.to = formattedPayload.to || formattedPayload.contactPhone;
+    formattedPayload.email = formattedPayload.email || formattedPayload.contactEmail;
+    formattedPayload.phone = formattedPayload.phone || formattedPayload.contactPhone;
+
+    if (!formattedPayload.data || typeof formattedPayload.data !== 'object') {
+      formattedPayload.data = {};
+    }
+    formattedPayload.data.scheduledDate = schedDate;
+    formattedPayload.data.scheduled_date = schedDate;
+    formattedPayload.data.date = schedDate;
+    formattedPayload.data.scheduledTime = schedTime;
+    formattedPayload.data.scheduled_time = schedTime;
+    formattedPayload.data.scheduledTimeSlot = schedTime;
+    formattedPayload.data.scheduled_time_slot = schedTime;
+    formattedPayload.data.time = schedTime;
+    formattedPayload.data.timeSlot = schedTime;
+    formattedPayload.data.actionUrl = formattedPayload.actionUrl;
+    formattedPayload.data.propertyAddress = formattedPayload.propertyAddress;
+    formattedPayload.data.contactPhone = formattedPayload.contactPhone;
+    formattedPayload.data.contactEmail = formattedPayload.contactEmail;
+    formattedPayload.data.technicianPhone = formattedPayload.technicianPhone;
+    formattedPayload.data.technicianEmail = formattedPayload.technicianEmail;
+    formattedPayload.data.technicianName = formattedPayload.technicianName;
+    formattedPayload.data.to = formattedPayload.to;
+    formattedPayload.data.email = formattedPayload.email;
+    formattedPayload.data.phone = formattedPayload.phone;
+
+    if (!formattedPayload.message) {
+      const jobDesc = formattedPayload.jobNumber ? `Job #${formattedPayload.jobNumber}` : (formattedPayload.title || `Work Order #${workOrderId || ''}`);
+      const addrDesc = formattedPayload.propertyAddress ? ` at ${formattedPayload.propertyAddress}` : '';
+      const timeDesc = schedDate ? ` updated to ${schedDate}${schedTime ? ` (${schedTime})` : ''}` : '';
+      formattedPayload.message = `Your maintenance schedule has been updated: ${jobDesc}${addrDesc}${timeDesc}. View details: ${formattedPayload.actionUrl}`;
+    }
+  }
+
   if (eventType === 'JOB_COMPLETED') {
     const frontendBase = getFrontendBaseUrl();
     const workOrderId = formattedPayload.workOrderId || formattedPayload.entityId || formattedPayload.relatedEntityId || null;
@@ -672,6 +799,7 @@ const dispatchN8NWebhook = async (eventType, payload) => {
     event: eventType,
     timestamp: new Date().toISOString(),
     source: 'nexus_fms_backend',
+    ...formattedPayload,
     data: formattedPayload,
   };
 

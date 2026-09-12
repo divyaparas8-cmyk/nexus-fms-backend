@@ -1274,6 +1274,7 @@ const updateJobStatus = async (req, res, next) => {
           technicianPhone: staff.phone,
           propertyAddress: existingJob.property_address,
           channels: ['IN_APP', 'SMS', 'EMAIL'],
+          skipWebhook: true,
         });
 
         dispatchN8NWebhook('TASK_SCHEDULE_CHANGED', {
@@ -1284,14 +1285,39 @@ const updateJobStatus = async (req, res, next) => {
           jobNumber: jobNum,
           title: existingJob.title,
           scheduledDate: targetSchedDate,
+          scheduled_date: targetSchedDate,
+          date: targetSchedDate,
+          scheduledTime: targetSchedSlot,
+          scheduled_time: targetSchedSlot,
           scheduledTimeSlot: targetSchedSlot,
+          scheduled_time_slot: targetSchedSlot,
+          time: targetSchedSlot,
+          timeSlot: targetSchedSlot,
           propertyAddress: existingJob.property_address,
           technicianName: staff.full_name,
           technicianPhone: staff.phone,
           technicianEmail: staff.email,
           contactPhone: staff.phone,
           contactEmail: staff.email,
+          to: staff.phone,
+          phone: staff.phone,
+          email: staff.email,
           actionUrl: directJobActionUrl,
+          data: {
+            date: targetSchedDate,
+            scheduledDate: targetSchedDate,
+            scheduled_date: targetSchedDate,
+            time: targetSchedSlot,
+            timeSlot: targetSchedSlot,
+            scheduledTime: targetSchedSlot,
+            scheduledTimeSlot: targetSchedSlot,
+            scheduled_time: targetSchedSlot,
+            scheduled_time_slot: targetSchedSlot,
+            propertyAddress: existingJob.property_address,
+            technicianName: staff.full_name,
+            technicianPhone: staff.phone,
+            actionUrl: directJobActionUrl,
+          },
         }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch schedule changed webhook:', err.message));
       }
     }
