@@ -19,6 +19,9 @@ app.use(cors({
 }));
 app.options('*', cors());
 
+// Route-specific high-limit body parser for inbound webhooks (supports Base64 email attachments)
+app.use('/api/v1/webhooks', express.json({ limit: '50mb' }));
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
