@@ -63,7 +63,9 @@ const runAutoMigrations = async () => {
       { name: 'cancelled_at', ddl: "ALTER TABLE work_orders ADD COLUMN cancelled_at TIMESTAMP NULL DEFAULT NULL" },
       { name: 'previous_appointment_date', ddl: "ALTER TABLE work_orders ADD COLUMN previous_appointment_date DATE DEFAULT NULL" },
       { name: 'previous_appointment_time', ddl: "ALTER TABLE work_orders ADD COLUMN previous_appointment_time VARCHAR(50) DEFAULT NULL" },
-      { name: 'detected_category', ddl: "ALTER TABLE work_orders ADD COLUMN detected_category VARCHAR(100) DEFAULT NULL" }
+      { name: 'detected_category', ddl: "ALTER TABLE work_orders ADD COLUMN detected_category VARCHAR(100) DEFAULT NULL" },
+      { name: 'external_reference_id', ddl: "ALTER TABLE work_orders ADD COLUMN external_reference_id VARCHAR(255) DEFAULT NULL" },
+      { name: 'original_sender_email', ddl: "ALTER TABLE work_orders ADD COLUMN original_sender_email VARCHAR(191) DEFAULT NULL" }
     ];
 
     for (const col of optionalColumns) {
@@ -74,6 +76,25 @@ const runAutoMigrations = async () => {
           // Field already exists or non-critical error
         }
       }
+    }
+
+    // Ensure unique index on external_reference_id and index on original_sender_email
+    try {
+      await pool.query("ALTER TABLE work_orders ADD UNIQUE INDEX uq_wo_external_reference (external_reference_id)");
+    } catch (idxErr) {
+      // Ignored if already exists
+    }
+    try {
+      await pool.query("ALTER TABLE work_orders ADD INDEX idx_wo_original_sender (original_sender_email)");
+    } catch (idxErr) {
+      // Ignored if already exists
+    }
+
+    // Ensure customer_media_uploads.quote_request_id allows NULL
+    try {
+      await pool.query("ALTER TABLE customer_media_uploads MODIFY COLUMN quote_request_id BIGINT NULL");
+    } catch (cmErr) {
+      // Ignored if already nullable
     }
 
     // 5. Ensure staff_profiles table has trade & workload management columns

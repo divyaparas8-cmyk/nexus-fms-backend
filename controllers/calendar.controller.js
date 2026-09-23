@@ -548,6 +548,41 @@ const dispatchJob = async (req, res, next) => {
       console.error('[Notification] Failed to notify on job dispatch:', notifErr);
     }
 
+    // 3. Additive notification to original work-order sender on schedule update / reschedule (Rule 4 & P0-5)
+    try {
+      const origSenderEmail = updatedRows[0]?.original_sender_email || updatedRows[0]?.manager_email;
+      if (origSenderEmail) {
+        const staffName = updatedRows[0]?.staff_name || 'Assigned Technician';
+        const jTitle = updatedRows[0]?.title || 'Maintenance Task';
+        const pAddr = updatedRows[0]?.live_property_address || updatedRows[0]?.property_address || '';
+        const rName = updatedRows[0]?.live_resident_name || updatedRows[0]?.resident_name || 'Resident';
+
+        await notificationService.dispatch({
+          recipientUserId: null,
+          recipientRole: 'OFFICE_ADMIN',
+          type: 'SENDER_APPOINTMENT_RESCHEDULED',
+          title: `Appointment Rescheduled: Job #${jobNum} - ${jTitle}`,
+          messageTemplate: `Dear Requester,\n\nPlease note that the appointment for "${jTitle}" at ${pAddr} (Resident: ${rName}) has been scheduled/rescheduled.\n\nNew Scheduled Date: ${targetDate}\nNew Time Slot: ${targetSlot}\nAssigned Staff: ${staffName}\n\nThank you,\nNexus FMS Team`,
+          structuredData: {
+            job_number: jobNum,
+            title: jTitle,
+            property_address: pAddr,
+            resident_name: rName,
+            scheduled_date: targetDate,
+            scheduled_time_slot: targetSlot,
+            technician_name: staffName
+          },
+          actionUrl: `/admin/calendar`,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: parseInt(targetJobId, 10),
+          channels: ['EMAIL'],
+          contactEmail: origSenderEmail,
+        }).catch(err => console.warn('[Calendar] Failed to notify original sender of reschedule:', err.message));
+      }
+    } catch (senderErr) {
+      console.warn('[Calendar] Failed to query/notify original sender on reschedule:', senderErr.message);
+    }
+
     res.status(200).json({
       success: true,
       message: `Work order ID ${targetJobId} dispatched successfully for ${targetDate} (${targetSlot}).`,

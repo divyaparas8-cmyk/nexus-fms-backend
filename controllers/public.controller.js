@@ -487,7 +487,7 @@ const submitPublicBooking = async (req, res, next) => {
     );
 
     const [woRows] = await connection.query(
-      "SELECT title, resident_name, contact_phone, contact_email, property_address, assigned_staff_id, manager_name, manager_email, job_number, description, priority FROM work_orders WHERE id = ?",
+      "SELECT title, resident_name, contact_phone, contact_email, property_address, assigned_staff_id, manager_name, manager_email, original_sender_email, job_number, description, priority FROM work_orders WHERE id = ?",
       [workOrderId]
     );
 
@@ -501,6 +501,7 @@ const submitPublicBooking = async (req, res, next) => {
     const targetStaffId = assignedStaffId || woRows[0]?.assigned_staff_id;
     const mgrName = woRows[0]?.manager_name || 'Manager';
     const mgrEmail = woRows[0]?.manager_email;
+    const origSenderEmail = woRows[0]?.original_sender_email;
     const jobNum = woRows[0]?.job_number || '';
 
     // Fetch technician details for notification
@@ -634,19 +635,20 @@ const submitPublicBooking = async (req, res, next) => {
       }).catch(err => console.error('[Tenant Booking Confirmation Notification Error]', err));
     }
 
-    // 4. Email confirmation to the manager who requested the works
-    if (mgrEmail) {
+    // 4. Email confirmation to the manager / original work-order sender (Rule 4 & P0-5)
+    const targetSenderEmail = origSenderEmail || mgrEmail;
+    if (targetSenderEmail) {
       const emailSubject = `Booking Confirmed: Job #${jobNum} - ${jobTitle}`;
-      const emailBody = `Dear ${mgrName},\n\nThe resident (${resName}) has scheduled their booking for ${jobTitle} at ${resAddress}.\n\nScheduled Date: ${dateVal}\nTime Slot: ${slotVal}\nAssigned Staff: ${techName}\n\nThank you,\nNexus FMS Team`;
+      const emailBody = `Dear ${mgrName || 'Requester'},\n\nThe resident (${resName}) has scheduled their booking for ${jobTitle} at ${resAddress}.\n\nScheduled Date: ${dateVal}\nTime Slot: ${slotVal}\nAssigned Staff: ${techName}\n\nThank you,\nNexus FMS Team`;
 
       await notificationService.dispatch({
         recipientUserId: null,
         recipientRole: 'OFFICE_ADMIN',
-        type: 'MANAGER_BOOKING_CONFIRMATION',
+        type: 'SENDER_BOOKING_CONFIRMATION',
         title: emailSubject,
         messageTemplate: emailBody,
         structuredData: {
-          manager_name: mgrName,
+          manager_name: mgrName || 'Requester',
           job_number: jobNum,
           scheduled_date: dateVal,
           scheduled_time_slot: slotVal
@@ -655,8 +657,29 @@ const submitPublicBooking = async (req, res, next) => {
         relatedEntityType: 'work_orders',
         relatedEntityId: workOrderId,
         channels: ['EMAIL'],
-        contactEmail: mgrEmail
-      }).catch(err => console.error('[Manager Booking Confirmation Email Error]', err));
+        contactEmail: targetSenderEmail
+      }).catch(err => console.error('[Sender Booking Confirmation Email Error]', err));
+
+      if (mgrEmail && origSenderEmail && mgrEmail.toLowerCase() !== origSenderEmail.toLowerCase()) {
+        await notificationService.dispatch({
+          recipientUserId: null,
+          recipientRole: 'OFFICE_ADMIN',
+          type: 'MANAGER_BOOKING_CONFIRMATION',
+          title: emailSubject,
+          messageTemplate: emailBody,
+          structuredData: {
+            manager_name: mgrName,
+            job_number: jobNum,
+            scheduled_date: dateVal,
+            scheduled_time_slot: slotVal
+          },
+          actionUrl: `/admin/calendar`,
+          relatedEntityType: 'work_orders',
+          relatedEntityId: workOrderId,
+          channels: ['EMAIL'],
+          contactEmail: mgrEmail
+        }).catch(err => console.error('[Manager Booking Confirmation Email Error]', err));
+      }
     }
 
     // 5. Dispatch TASK_ASSIGNED webhook to N8N with full technician contact info

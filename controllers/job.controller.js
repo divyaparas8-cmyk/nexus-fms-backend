@@ -5,6 +5,7 @@ const QuoteRequestService = require('../services/quoteRequest.service');
 const BookingRequestService = require('../services/bookingRequest.service');
 const { uploadMediaFile } = require('../services/cloudinary.service');
 const { dispatchN8NWebhook, getAdminAndOfficeRecipientEmail } = require('../services/webhook.service');
+const { createWorkOrderEntity } = require('../services/workOrder.service');
 
 
 // Helper to format any date input to strict YYYY-MM-DD
@@ -365,300 +366,21 @@ const getJobById = async (req, res, next) => {
 // @access  Private (Office Admin & Staff)
 const createJob = async (req, res, next) => {
   try {
-    const {
-      title,
-      resident_id, tenantId,
-      resident_name, tenantName,
-      contact_phone, phone, contactPhone,
-      contact_email, email, contactEmail,
-      property_address, address,
-      description,
-      duration_hours, durationHours,
-      assigned_staff_id, assignedStaffId,
-      manager_name, managerName,
-      quote_amount, quoteAmount,
-      section, pipeline_stage,
-      scheduled_date, scheduledDate,
-      scheduled_time_slot, scheduledTimeSlot,
-      priority,
-      assigned_staff_ids, assignedStaffIds,
-    } = req.body;
+    const creationResult = await createWorkOrderEntity(req.body, req.user);
 
-    let resId = resident_id || tenantId || null;
-    let resName = (resident_name || tenantName || '').trim();
-    let resPhone = (contact_phone || phone || contactPhone || '').trim();
-    let resAddress = (property_address || address || '').trim();
-    let resEmail = (contact_email || email || contactEmail || '').trim() || null;
-
-    // 1. If resident_id is passed, fetch real resident details from residents table
-    if (resId) {
-      const cleanResId = String(resId).replace(/^(ten-|res-)/, '');
-      const [resRows] = await pool.query('SELECT * FROM residents WHERE id = ?', [cleanResId]);
-      if (resRows.length > 0) {
-        const resObj = resRows[0];
-        resId = resObj.id;
-        resName = resObj.full_name;
-        resPhone = resObj.phone;
-        resAddress = resObj.address;
-        if (resObj.email) resEmail = resObj.email;
-      }
-    }
-
-    // 2. If resident_id is NOT passed, auto-link or create resident record in residents table
-    if (!resId && resName && resPhone && resAddress) {
-      const [existingRes] = await pool.query('SELECT id FROM residents WHERE phone = ? OR full_name = ?', [resPhone, resName]);
-      if (existingRes.length > 0) {
-        resId = existingRes[0].id;
-      } else {
-        const [newResResult] = await pool.query(
-          'INSERT INTO residents (full_name, phone, email, address) VALUES (?, ?, ?, ?)',
-          [resName, resPhone, resEmail, resAddress]
-        );
-        resId = newResResult.insertId;
-      }
-    }
-
-    const jobTitle = (title || '').trim();
-    const jobDesc = (description || '').trim() || null;
-    const hours = parseFloat(duration_hours || durationHours || 1.5);
-    const stage = pipeline_stage || section || 'Quotes';
-    const mgrName = (manager_name || managerName || req.user.full_name || 'Office Admin').trim();
-    const quoteVal = quote_amount || quoteAmount ? parseFloat(quote_amount || quoteAmount) : null;
-    const schedDate = scheduled_date || scheduledDate || null;
-    const schedSlot = scheduled_time_slot || scheduledTimeSlot || null;
-    const jobPriority = priority || 'NORMAL';
-    const staffIdsArr = assigned_staff_ids || assignedStaffIds || [];
-    const staffIdsJson = staffIdsArr.length > 0 ? JSON.stringify(staffIdsArr) : null;
-
-    // Generate mock coordinates near London for demo
-    const mockLat = 51.5074 + (Math.random() - 0.5) * 0.1;
-    const mockLng = -0.1278 + (Math.random() - 0.5) * 0.1;
-
-    // Contact & Title Validation Enforcement
-    if (!jobTitle) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Work order title is required.',
-      });
-    }
-
-    if (!resName) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Resident Name is required.',
-      });
-    }
-
-    if (!resPhone) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Contact Phone Number is required.',
-      });
-    }
-
-    if (!resAddress) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation Error: Property Address is required.',
-      });
-    }
-
-    // Clean & resolve Staff Profile ID (supports profile_id or user_id)
-    let rawStaffId = assigned_staff_id || assignedStaffId || (staffIdsArr.length > 0 ? staffIdsArr[0] : null);
-    if (rawStaffId) {
-      const cleanId = String(rawStaffId).replace(/^(stf-|usr-)/, '');
-      const [spRows] = await pool.query(
-        'SELECT id FROM staff_profiles WHERE id = ? OR user_id = ?',
-        [cleanId, cleanId]
-      );
-      if (spRows.length > 0) {
-        rawStaffId = spRows[0].id;
-      } else {
-        const [uRows] = await pool.query('SELECT id FROM users WHERE id = ? AND role = "MAINTENANCE_STAFF"', [cleanId]);
-        if (uRows.length > 0) {
-          const [insRes] = await pool.query(
-            'INSERT INTO staff_profiles (user_id, staff_code, role_title, color_hex) VALUES (?, ?, ?, ?)',
-            [uRows[0].id, `STF-${100 + Number(uRows[0].id)}`, 'Maintenance Specialist', '#009bf2']
-          );
-          rawStaffId = insRes.insertId;
-        } else {
-          rawStaffId = null;
-        }
-      }
-    }
-
-
-    // Generate unique job number & cryptographically strong 32-byte secure token
-    const randomNumber = Math.floor(1000 + Math.random() * 9000);
-    const jobNumber = `JOB-2026-${randomNumber}`;
-    const secureToken = `tok_${crypto.randomBytes(32).toString('hex')}`;
-
-    const actualMgrEmail = (req.body.actual_manager_email || req.body.manager_email || req.user.email || null);
-
-    const [result] = await pool.query(
-      `INSERT INTO work_orders (
-        job_number, title, resident_id, resident_name, contact_phone, contact_email,
-        property_address, description, duration_hours, pipeline_stage,
-        assigned_staff_id, assigned_staff_ids, priority, latitude, longitude,
-        manager_name, quote_amount, scheduled_date,
-        scheduled_time_slot, secure_token, created_by, manager_email
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        jobNumber, jobTitle, resId, resName, resPhone, resEmail,
-        resAddress, jobDesc, hours, stage,
-        rawStaffId, staffIdsJson, jobPriority, mockLat, mockLng,
-        mgrName, quoteVal, schedDate,
-        schedSlot, secureToken, req.user.id, actualMgrEmail
-      ]
-    );
-
-    const [newJobRows] = await pool.query(
-      `SELECT 
-        w.*,
-        (SELECT SUM(total_cost) FROM job_material_costs jmc WHERE jmc.work_order_id = w.id) AS total_material_cost,
-        r.full_name as live_resident_name,
-        r.phone as live_contact_phone,
-        r.email as live_contact_email,
-        r.address as live_property_address,
-        u.full_name as staff_name,
-        sp.color_hex as staff_color
-       FROM work_orders w
-       LEFT JOIN residents r ON w.resident_id = r.id
-       LEFT JOIN staff_profiles sp ON w.assigned_staff_id = sp.id
-       LEFT JOIN users u ON sp.user_id = u.id
-       WHERE w.id = ?`,
-      [result.insertId]
-    );
-
-    // Notification Triggers
-    if (stage === 'Quotes') {
-      await QuoteRequestService.triggerAutoPhotoRequest(result.insertId).catch(err => {
+    // P0-1: Photo request triggered AFTER the service returns.
+    // createWorkOrderEntity uses pool (auto-commit per statement), so the work order
+    // is already persisted at this point — safe to send the SMS/email now.
+    if (creationResult.shouldTriggerPhotoRequest) {
+      QuoteRequestService.triggerAutoPhotoRequest(creationResult.workOrderId).catch(err => {
         console.error('[createJob] Error triggering auto photo request:', err.message);
       });
-      
-      const [admins] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
-      for (const admin of admins) {
-        await notificationService.createNotification({
-          recipientUserId: admin.id,
-          type: 'NEW_QUOTE_REQUEST',
-          title: 'New repair request received',
-          message: `${jobTitle} for ${resName} at ${resAddress}`,
-          relatedEntityType: 'work_orders',
-          relatedEntityId: result.insertId,
-          actionUrl: `/admin/pipeline?stage=Quotes`
-        });
-      }
-    }
-
-    if (stage === 'Jobs') {
-      BookingRequestService.triggerAutoBookingRequest(result.insertId);
-    }
-
-    if (rawStaffId) {
-      const [spUser] = await pool.query(
-        'SELECT sp.id, sp.user_id, u.full_name, u.phone as staff_phone, u.phone as user_phone, u.email FROM staff_profiles sp JOIN users u ON sp.user_id = u.id WHERE sp.id = ?',
-        [rawStaffId]
-      );
-      if (spUser.length > 0) {
-        const staff = spUser[0];
-        const frontendBase = (process.env.FRONTEND_URL || process.env.VITE_PUBLIC_APP_URL || process.env.PUBLIC_APP_URL || 'https://nexus-fms.netlify.app').replace(/\/$/, '');
-        const directJobActionUrl = `${frontendBase}/maintenance/my-tasks?jobId=${result.insertId}`;
-        const newAssignMsg = `You have been assigned to Job #${jobNumber}: ${jobTitle} at ${resAddress}. Open task portal: ${directJobActionUrl}`;
-
-        await notificationService.createNotification({
-          recipientUserId: staff.user_id,
-          recipientRole: 'MAINTENANCE_STAFF',
-          type: 'TASK_ASSIGNED',
-          title: 'New Task Assigned',
-          message: newAssignMsg,
-          relatedEntityType: 'work_orders',
-          relatedEntityId: result.insertId,
-          actionUrl: directJobActionUrl,
-          technicianName: staff.full_name,
-          technicianPhone: staff.staff_phone || staff.user_phone,
-          contactPhone: staff.staff_phone || staff.user_phone,
-          contactEmail: staff.email,
-          propertyAddress: resAddress,
-          channels: ['IN_APP', 'SMS', 'EMAIL'],
-          skipWebhook: true,
-        });
-
-        dispatchN8NWebhook('TASK_ASSIGNED', {
-          event: 'TASK_ASSIGNED',
-          type: 'TASK_ASSIGNED',
-          entityId: result.insertId,
-          workOrderId: result.insertId,
-          jobNumber: jobNumber,
-          title: jobTitle,
-          message: newAssignMsg,
-          scheduledDate: schedDate || null,
-          scheduled_date: schedDate || null,
-          date: schedDate || null,
-          scheduledTime: schedSlot || null,
-          scheduled_time: schedSlot || null,
-          scheduledTimeSlot: schedSlot || null,
-          scheduled_time_slot: schedSlot || null,
-          time: schedSlot || null,
-          timeSlot: schedSlot || null,
-          priority: jobPriority,
-          propertyAddress: resAddress,
-          residentName: resName,
-          residentPhone: resPhone,
-          residentEmail: resEmail,
-          residentNotes: jobDescription || '',
-          technicianName: staff.full_name,
-          technicianEmail: staff.email,
-          technicianPhone: staff.staff_phone || staff.user_phone,
-          technician: {
-            id: staff.id,
-            name: staff.full_name,
-            email: staff.email,
-            phone: staff.staff_phone || staff.user_phone,
-          },
-          contactPhone: staff.staff_phone || staff.user_phone,
-          contactEmail: staff.email,
-          assignmentType: 'MANUAL_ADMIN',
-          actionUrl: directJobActionUrl,
-        }).catch(err => console.warn('[N8N_DISPATCH_WARN] Failed to dispatch TASK_ASSIGNED webhook on create:', err.message));
-      }
-
-      // Audit log for manual assignment upon creation
-      await pool.query(
-        `INSERT INTO job_assignment_logs 
-          (work_order_id, staff_id, assigned_by, assignment_type, trade_category, match_score, selection_reason)
-         VALUES (?, ?, ?, 'MANUAL_ADMIN', ?, 0, ?)`,
-        [
-          result.insertId,
-          rawStaffId,
-          req.user?.full_name || 'Office Admin',
-          tradeCategory || null,
-          `Manually assigned by ${req.user?.full_name || 'Office Admin'} upon creation`,
-        ]
-      ).catch((logErr) => console.warn('[AuditLog] Failed to log createJob assignment:', logErr.message));
-    }
-
-    // Create Notification for new job
-    try {
-      const [adminRows] = await pool.query("SELECT id FROM users WHERE role = 'OFFICE_ADMIN'");
-      for (const admin of adminRows) {
-        await notificationService.createNotification({
-          recipientUserId: admin.id,
-          type: 'NEW_JOB',
-          title: 'New Maintenance Job Created',
-          message: `Job #${jobNumber} (${jobTitle}) has been created in ${stage}.`,
-          relatedEntityType: 'work_orders',
-          relatedEntityId: result.insertId,
-          actionUrl: '/admin/pipeline'
-        });
-      }
-    } catch (notifErr) {
-      console.error('[Notification] Failed to notify on job creation:', notifErr);
     }
 
     res.status(201).json({
       success: true,
       message: 'Work order created successfully.',
-      data: formatJobRow(newJobRows[0], req.user ? req.user.role : null),
+      data: formatJobRow(creationResult.jobRow, req.user ? req.user.role : null),
     });
   } catch (err) {
     next(err);
@@ -1638,10 +1360,54 @@ const cancelJob = async (req, res, next) => {
        });
     }
 
+    // Additive notification to original work-order sender — DEFERRED until after commit (P0-3).
+    // senderData is read inside the open transaction (dirty-read within same session is intentional
+    // and correct for InnoDB), but the actual dispatch occurs after connection.commit() below.
+    let deferredSenderDispatch = null;
+    try {
+      const [senderRows] = await connection.query(
+        'SELECT original_sender_email, manager_email, job_number, title, property_address, resident_name FROM work_orders WHERE id = ?',
+        [id]
+      );
+      const origSenderEmail = senderRows[0]?.original_sender_email || senderRows[0]?.manager_email;
+      if (origSenderEmail) {
+        const jNum = senderRows[0]?.job_number || id;
+        const jTitle = senderRows[0]?.title || 'Maintenance';
+        const pAddr = senderRows[0]?.property_address || '';
+        const rName = senderRows[0]?.resident_name || 'Resident';
+        // Capture payload; dispatch happens only after successful commit (P0-3).
+        deferredSenderDispatch = {
+          recipientUserId: null,
+          recipientRole: 'OFFICE_ADMIN',
+          type: 'SENDER_APPOINTMENT_CANCELLED',
+          title: `Appointment Cancelled: Job #${jNum} - ${jTitle}`,
+          messageTemplate: `Dear Requester,\n\nPlease be advised that the maintenance appointment for "${jTitle}" at ${pAddr} (Resident: ${rName}) has been cancelled.\nReason: ${reason || 'Operational update'}.\n\nA new booking request has been sent to the resident to reschedule.\n\nThank you,\nNexus FMS Team`,
+          structuredData: {
+            job_number: jNum,
+            title: jTitle,
+            property_address: pAddr,
+            resident_name: rName,
+            reason: reason || 'Operational update'
+          },
+          channels: ['EMAIL'],
+          contactEmail: origSenderEmail,
+        };
+      }
+    } catch (senderErr) {
+      console.warn('[cancelJob] Failed to query original sender for cancellation notice:', senderErr.message);
+    }
+
     await connection.commit();
     connection.release();
 
-    // 8. Generate a new booking/rebooking request 
+    // P0-3: Dispatch sender cancellation email ONLY after commit succeeds.
+    // If commit had failed and rolled back, this code would never be reached.
+    if (deferredSenderDispatch) {
+      dispatcher.dispatch(deferredSenderDispatch)
+        .catch(err => console.warn('[cancelJob] Error notifying original sender:', err.message));
+    }
+
+    // 8. Generate a new booking/rebooking request
     const { triggerAutoBookingRequest } = require('../services/bookingRequest.service');
     await triggerAutoBookingRequest(id);
 
