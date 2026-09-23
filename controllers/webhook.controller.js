@@ -120,7 +120,7 @@ const handleIncomingEmailQuote = async (req, res) => {
     // 3. Process & Stage Attachments (P0-1, P0-7: Done BEFORE DB commit)
     const processedAttachments = [];
     if (Array.isArray(attachments) && attachments.length > 0) {
-      const uploadDir = path.join(__dirname, '..', 'uploads', 'customer_media');
+      const uploadDir = path.join(__dirname, '..', 'uploads');
       if (!fs.existsSync(uploadDir)) {
         fs.mkdirSync(uploadDir, { recursive: true });
       }
@@ -195,7 +195,7 @@ const handleIncomingEmailQuote = async (req, res) => {
           };
 
           const uploadResult = await uploadMediaFile(multerShim, 'customer_media');
-          const finalUrl = uploadResult?.url || `/uploads/customer_media/${uniqueFileName}`;
+          const finalUrl = uploadResult?.url || `/uploads/${uniqueFileName}`;
           // P0-2: Record the Cloudinary public_id so we can delete it on DB rollback.
           if (uploadResult?.public_id) {
             uploadedCloudinaryPublicIds.push(uploadResult.public_id);

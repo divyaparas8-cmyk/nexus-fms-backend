@@ -27,6 +27,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Serve static uploads directory for media/photos
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads', 'customer_media')));
+app.use('/uploads/customer_media', express.static(path.join(__dirname, 'uploads', 'customer_media')));
 
 // Import Routes
 const authRoutes = require('./routes/auth.routes');
