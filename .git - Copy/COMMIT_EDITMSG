@@ -1,0 +1,1 @@
+fix(media): serve customer_media under /uploads and align webhook upload directory
